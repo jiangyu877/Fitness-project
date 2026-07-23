@@ -3,9 +3,9 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 export function createOpenApiDocument(app: INestApplication) {
   const config = new DocumentBuilder()
-    .setTitle('Lianban Phase 1 API')
-    .setDescription('Stable engineering baseline contract')
-    .setVersion('0.1.0')
+    .setTitle('Lianban V1.0 API')
+    .setDescription('Stable Phase 1 and Phase 2 engineering contract')
+    .setVersion('0.2.0')
     .build();
 
   return SwaggerModule.createDocument(app, config);
