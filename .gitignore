@@ -1,0 +1,8 @@
+# Windows metadata
+desktop.ini
+
+# Codex machine-local environment
+.codex/environments/
+
+# Local brainstorming previews and server state
+.superpowers/

@@ -1,0 +1,53 @@
+<h2>首轮原型如何组织？</h2>
+<p class="subtitle">目标是验证移动端用户闭环与后台审核闭环，同时控制首轮制作成本。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:20px;background:#f4f7f5">
+      <div style="display:grid;grid-template-columns:1fr 1.15fr;gap:12px;min-height:180px">
+        <div style="background:#17251f;color:#fff;padding:12px;border-radius:6px">
+          <strong>移动 H5</strong><br><br>
+          建档<br>今日<br>计划<br>记录<br>周反馈
+        </div>
+        <div style="background:#fff;padding:12px;border:1px solid #d6ddd8;border-radius:6px">
+          <strong>运营后台</strong><br><br>
+          风险复核<br>计划审核<br>周调整审核<br>异常处理
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>A. 双端关键闭环</h3><p>移动端完整主流程，后台深入处理四类关键任务；非核心模块仅保留导航结构。</p></div>
+  </div>
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:20px;background:#f4f7f5">
+      <div style="display:grid;grid-template-columns:1fr 1.15fr;gap:12px;min-height:180px">
+        <div style="background:#17251f;color:#fff;padding:12px;border-radius:6px">
+          <strong>移动 H5</strong><br><br>
+          建档<br>今日<br>计划<br>记录<br>周反馈
+        </div>
+        <div style="background:#fff;padding:12px;border:1px solid #d6ddd8;border-radius:6px;color:#7b8580">
+          <strong>运营后台</strong><br><br>
+          工作台<br>用户<br>计划<br>反馈
+          <br><br>静态结构
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>B. 用户端优先</h3><p>移动端完整可用，后台只展示信息架构与静态示意，适合只做早期用户访谈。</p></div>
+  </div>
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:20px;background:#f4f7f5">
+      <div style="display:grid;grid-template-columns:1fr 1.15fr;gap:12px;min-height:180px">
+        <div style="background:#17251f;color:#fff;padding:12px;border-radius:6px">
+          <strong>移动 H5</strong><br><br>
+          核心闭环<br><br>安全例外<br><br>消息与帮助
+        </div>
+        <div style="background:#fff;padding:12px;border:1px solid #d6ddd8;border-radius:6px">
+          <strong>运营后台</strong><br><br>
+          全部模块<br>完整交互<br>全部状态
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>C. 双端全量页面</h3><p>所有规划模块都制作可点击交互，覆盖广但会延长首轮验证周期。</p></div>
+  </div>
+</div>
+
+<div class="section"><p><strong>建议：</strong>选择 A。它与已确认的首轮范围一致，能验证用户体验和人工服务闭环，又不会把支付、内容管理等非核心模块提前做重。</p></div>
