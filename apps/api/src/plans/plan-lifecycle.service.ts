@@ -85,6 +85,19 @@ export class PlanLifecycleService {
   }
 
   current(userId: string, now: Date) {
+    const dueScheduled = [...this.plans.values()]
+      .map((stored) => stored.plan)
+      .filter(
+        (plan) =>
+          plan.userId === userId &&
+          plan.status === 'SCHEDULED' &&
+          plan.effectiveAt <= now,
+      )
+      .sort((left, right) => left.effectiveAt.getTime() - right.effectiveAt.getTime());
+    for (const plan of dueScheduled) {
+      this.transition(plan.id, { type: 'ACTIVATE', occurredAt: now });
+    }
+
     const active = [...this.plans.values()]
       .map((stored) => stored.plan)
       .filter(

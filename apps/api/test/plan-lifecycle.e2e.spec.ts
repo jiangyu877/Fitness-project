@@ -168,6 +168,31 @@ describe('plan lifecycle HTTP API', () => {
       .expect(409);
     expect(response.body.errorCode).toBe('SINGLE_PENDING_VERSION_REQUIRED');
   });
+
+  it('promotes a fully confirmed scheduled version when its effective time arrives', async () => {
+    app = await buildApplication(approvedEnvironment);
+    const agent = request(app.getHttpServer());
+    await preparePublished(agent, 'plan-auto-active', 'user-6');
+    await transition(
+      agent,
+      'plan-auto-active',
+      { type: 'CONFIRM_DIET', occurredAt: '2026-08-09T10:00:00.000Z' },
+      'PENDING_CONFIRMATION',
+    );
+    await transition(
+      agent,
+      'plan-auto-active',
+      { type: 'CONFIRM_TRAINING', occurredAt: '2026-08-09T10:01:00.000Z' },
+      'SCHEDULED',
+    );
+
+    const current = await agent
+      .get('/api/v1/users/user-6/plans/current')
+      .query({ at: effectiveAt })
+      .expect(200);
+    expect(current.body.businessStatus).toBe('CURRENT_PLAN');
+    expect(current.body.plan).toMatchObject({ id: 'plan-auto-active', status: 'ACTIVE' });
+  });
 });
 
 type Agent = ReturnType<typeof request>;

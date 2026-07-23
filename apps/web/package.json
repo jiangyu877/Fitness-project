@@ -7,6 +7,6 @@
     "dev": "vite --config vite.config.ts",
     "build": "vite build --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src/**/*.spec.ts"
+    "test": "vitest run"
   }
 }

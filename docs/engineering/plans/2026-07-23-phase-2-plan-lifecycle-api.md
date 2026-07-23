@@ -16,11 +16,11 @@
 - Modify: `packages/domain/src/plan.ts`
 - Modify: `packages/domain/test/plan-lifecycle.spec.ts`
 
-- [ ] Write failing tests for the CST confirmation deadline, the 24-hour publication lead time, professional-review rejection, user rejection, activation at the effective instant, timeout immutability, history, and plan gaps.
-- [ ] Run `npm test -- packages/domain/test/plan-lifecycle.spec.ts` and verify failures name the missing events or guards.
-- [ ] Add only the required events and pure functions; do not add screening, risk, nutrition, training, or adjustment calculations.
-- [ ] Re-run the focused test and `npm run typecheck --workspace @lianban/domain` until both pass.
-- [ ] Commit the domain slice.
+- [x] Write failing tests for the CST confirmation deadline, the 24-hour publication lead time, professional-review rejection, user rejection, activation at the effective instant, timeout immutability, history, and plan gaps.
+- [x] Run `npm test -- packages/domain/test/plan-lifecycle.spec.ts` and verify failures name the missing events or guards.
+- [x] Add only the required events and pure functions; do not add screening, risk, nutrition, training, or adjustment calculations.
+- [x] Re-run the focused test and `npm run typecheck --workspace @lianban/domain` until both pass.
+- [x] Commit the domain slice.
 
 ### Task 2: Add A Testable Lifecycle API
 
@@ -32,12 +32,12 @@
 - Modify: `apps/api/src/openapi.ts`
 - Create: `apps/api/test/plan-lifecycle.e2e.spec.ts`
 
-- [ ] Write failing HTTP tests for draft creation, dual review, publication, two confirmations, scheduled activation, reviewer/user rejection, expiration, current/history/gap reads, single pending version, and stable blocker/error responses.
-- [ ] Verify RED with `npm test -- apps/api/test/plan-lifecycle.e2e.spec.ts`.
-- [ ] Implement an injected in-memory repository and lifecycle service with stable IDs, versions, and ISO timestamps. Enforce `PROFESSIONAL_RULES_UNAPPROVED` before publication and keep demo content non-publishable.
-- [ ] Register the controller and describe stable request/response codes in OpenAPI.
-- [ ] Re-run focused API and OpenAPI tests plus API typecheck.
-- [ ] Commit the API slice.
+- [x] Write failing HTTP tests for draft creation, dual review, publication, two confirmations, scheduled activation, reviewer/user rejection, expiration, current/history/gap reads, single pending version, and stable blocker/error responses.
+- [x] Verify RED with `npm test -- apps/api/test/plan-lifecycle.e2e.spec.ts`.
+- [x] Implement an injected in-memory repository and lifecycle service with stable IDs, versions, and ISO timestamps. Enforce `PROFESSIONAL_RULES_UNAPPROVED` before publication and keep demo content non-publishable.
+- [x] Register the controller and describe stable request/response codes in OpenAPI.
+- [x] Re-run focused API and OpenAPI tests plus API typecheck.
+- [x] Commit the API slice.
 
 ### Task 3: Align Persistence And Handoff
 
@@ -47,9 +47,9 @@
 - Modify: `packages/database/test/migration.spec.ts`
 - Modify: `docs/engineering/contracts/phase-1-stable-contract.md`
 
-- [ ] Write a failing migration test proving lifecycle timestamps and immutable/history-supporting fields are present and invalid scheduling windows are rejected.
-- [ ] Verify RED with `npm test -- packages/database/test/migration.spec.ts`.
-- [ ] Add the portable SQL migration and register it without professional seed data.
-- [ ] Update the engineering contract with the Phase 2 endpoints, statuses, errors, and remaining blockers.
-- [ ] Run `npm test`, `npm run typecheck`, `npm run build`, and a fresh `npm run db:migrate` against an empty local path.
-- [ ] Check owned-file whitespace and scope, then commit the persistence and contract slice.
+- [x] Write a failing migration test proving lifecycle timestamps and immutable/history-supporting fields are present and invalid scheduling windows are rejected.
+- [x] Verify RED with `npm test -- packages/database/test/migration.spec.ts`.
+- [x] Add the portable SQL migration and register it without professional seed data.
+- [x] Update the engineering contract with the Phase 2 endpoints, statuses, errors, and remaining blockers.
+- [x] Run `npm test`, `npm run typecheck`, `npm run build`, and a fresh `npm run db:migrate` against an empty local path.
+- [x] Check owned-file whitespace and scope, then commit the persistence and contract slice.

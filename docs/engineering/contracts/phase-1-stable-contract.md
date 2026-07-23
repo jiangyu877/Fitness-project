@@ -1,13 +1,13 @@
-# Phase 1 Stable Contract
+# Phase 1 And 2 Stable Contract
 
-Version: 0.1.0
+Version: 0.2.0
 Date: 2026-07-23
 Owner: R&D
-Status: Implemented engineering baseline; not approved for real-user service
+Status: Implemented testable engineering slices; not approved for real-user service
 
 ## Scope
 
-This contract is the stable integration surface available to UI during Phase 1. It does not replace `docs/product/lianban-v1.0-prd.md` and does not claim that the full V1.0 business API exists.
+This contract is the stable integration surface available to UI through Phase 2. It does not replace `docs/product/lianban-v1.0-prd.md` and does not claim that the full V1.0 business API exists.
 
 The implementation intentionally contains no screening questions, risk thresholds, nutrition values, training values, or weekly-adjustment rules. Those inputs remain release blockers until their professional approvals are recorded.
 
@@ -70,9 +70,39 @@ Unknown fixture IDs return HTTP 404 with structured fields:
 
 When `DEMO_MODE=false`, the entire demo route is absent and returns HTTP 404. There is no production identity-switch API.
 
+### Plan lifecycle API
+
+The Phase 2 testable slice exposes:
+
+- `POST /api/v1/plan-versions` to create a draft with `id`, `userId`, `effectiveAt`, optional `effectiveTo`, and `contentMode`;
+- `GET /api/v1/plan-versions/{id}` to read the latest in-memory state;
+- `POST /api/v1/plan-versions/{id}/transitions` to apply a controlled lifecycle event;
+- `GET /api/v1/users/{userId}/plans/current?at={instant}` to return `CURRENT_PLAN` or explicit `PLAN_GAP`;
+- `GET /api/v1/users/{userId}/plans/history` to return newest-first read-only history.
+
+Stable plan statuses are `DRAFT`, `IN_REVIEW`, `READY_TO_PUBLISH`, `PENDING_CONFIRMATION`, `SCHEDULED`, `ACTIVE`, `STAFF_REVISION_REQUIRED`, `USER_REVISION_REQUIRED`, `CONFIRMATION_TIMED_OUT`, and `SUPERSEDED`.
+
+Transition types are `SUBMIT_REVIEW`, diet/training approval or review rejection, `PUBLISH`, diet/training confirmation or user rejection, `EXPIRE_CONFIRMATION`, `ACTIVATE`, and `SUPERSEDE`. Review rejection requires `actorId` and `reasonCode`; user rejection requires `occurredAt` and `reasonCode`; all time-driven transitions require `occurredAt`.
+
+The API derives `confirmationDeadlineAt` as 20:00 China Standard Time on the day before the effective date. Publication later than 24 hours before that deadline is rejected. A fully confirmed `SCHEDULED` version is promoted through the same guarded `ACTIVATE` event when the current-plan read observes that its effective time has arrived.
+
+Stable conflict codes include:
+
+| Code | Meaning | Typical recovery |
+| --- | --- | --- |
+| `PROFESSIONAL_RULES_UNAPPROVED` | Professional inputs have not been approved | `WAIT_FOR_PROFESSIONAL_APPROVAL` |
+| `DEMO_CONTENT_REFERENCED` | Demo/unreviewed content was referenced | `REPLACE_WITH_REVIEWED_CONTENT` |
+| `SINGLE_PENDING_VERSION_REQUIRED` | The user already has a pending or scheduled version | `WAIT_FOR_EXISTING_VERSION`, `OPEN_PLAN_HISTORY` |
+| `PUBLICATION_LEAD_TIME_INSUFFICIENT` | Publication missed the 24-hour lead time | `CREATE_NEW_VERSION` |
+| `CONFIRMATION_DEADLINE_PASSED` | Confirmation was attempted at or after cutoff | `CREATE_NEW_VERSION` |
+| `EFFECTIVE_TIME_NOT_REACHED` | Activation was attempted before the effective instant | `WAIT_FOR_EFFECTIVE_TIME` |
+| `STATE_TRANSITION_NOT_ALLOWED` | The event is invalid from the current state | `REFRESH`, `OPEN_PLAN_HISTORY` |
+
+The Phase 2 API repository is process-local and in-memory. It exists for deterministic UI integration and automated acceptance only; restart loses its records. It is not the production persistence implementation.
+
 ## OpenAPI
 
-The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes the stable fixture, goal, review, and readiness enums. It contains no authentication secrets or professional placeholder values.
+The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes stable fixture, goal, review, readiness, plan status, transition, current/gap, and conflict enums. It contains no authentication secrets or professional placeholder values.
 
 ## Domain And Database Guarantees
 
@@ -81,6 +111,9 @@ The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at
 - Diet and training confirmations are independent; rejection returns the whole version for revision.
 - Only one pending or scheduled plan version per user is permitted.
 - Confirmation deadlines and explicit old-plan gaps are represented.
+- Publication is at least 24 hours before the CST confirmation cutoff.
+- Versions confirmed in both parts become scheduled and are activated no earlier than `effectiveAt`.
+- Published payload and schedule-defining fields cannot be edited in place; a new version is required.
 - Real publication is blocked when professional rules are unapproved or referenced content is demo/unreviewed.
 - SQL migrations contain no professional seed data.
 
@@ -93,7 +126,7 @@ These guarantees are currently covered by domain and migration tests. The full p
 - Treat `demoOnly`, `reviewStatus`, and `publishable` as mandatory publication safeguards.
 - Display the exact disclaimer on every screen containing this demo content.
 - Use readiness and error codes for state selection; do not parse prose.
-- Deep links should carry only a target identifier and fetch current state when opened; that target API is not part of this slice yet.
+- Deep links should carry only a target identifier and fetch the latest plan version or current state when opened.
 
 ## Deferred Release Inputs
 

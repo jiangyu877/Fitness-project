@@ -6,6 +6,10 @@ const migrations = [
     version: '001_core',
     url: new URL('../migrations/001_core.sql', import.meta.url),
   },
+  {
+    version: '002_plan_lifecycle_guards',
+    url: new URL('../migrations/002_plan_lifecycle_guards.sql', import.meta.url),
+  },
 ] as const;
 
 export async function applyMigrations(database: PGlite): Promise<void> {
