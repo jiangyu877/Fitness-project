@@ -3,9 +3,11 @@
 版本：0.3
 日期：2026-07-23
 负责人：产品部
-状态：待 v2.0 产品基线确认后执行
+状态：历史推进记录，受 V1.0 PRD 约束
 
-当前范围、状态、角色、留存、优先级和验收口径以 `docs/superpowers/specs/2026-07-23-closed-beta-mvp-product-decisions.md` v1.1 为准。专业输入门槛以 `docs/superpowers/specs/2026-07-23-professional-input-approval-checklist.md` 为准。
+> 说明：本文记录 PRD 合并前的推进任务与决策过程，不再作为产品基线或开工门槛来源。当前产品要求、阶段门槛和审批规则以 `docs/product/lianban-v1.0-prd.md` 为准。
+
+当前范围、状态、角色、留存、优先级和验收口径以 `docs/product/lianban-v1.0-prd.md` 为准。专业输入门槛以 `docs/superpowers/specs/2026-07-23-professional-input-approval-checklist.md` 为准。
 
 ## 1. 产品部职责
 
