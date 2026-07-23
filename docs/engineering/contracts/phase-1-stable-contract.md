@@ -100,6 +100,8 @@ Stable conflict codes include:
 
 The Phase 2 API repository is process-local and in-memory. It exists for deterministic UI integration and automated acceptance only; restart loses its records. It is not the production persistence implementation.
 
+Phase 3 adds `packages/database/src/plan-repository.ts` as a tested PGlite/Postgres-compatible persistence adapter. It currently remains adapter-only: the Phase 2 HTTP service is not silently switched to persistence until transaction boundaries, authorization context, and migration-backed integration tests are completed. The adapter provides `recordVersion` optimistic concurrency, idempotency replay, and append-only audit insertion; it does not authorize actors or approve professional content.
+
 ## OpenAPI
 
 The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes stable fixture, goal, review, readiness, plan status, transition, current/gap, and conflict enums. It contains no authentication secrets or professional placeholder values.
