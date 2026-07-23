@@ -26,6 +26,10 @@ const migrations = [
     version: '006_identity_security_hardening',
     file: '006_identity_security_hardening.sql',
   },
+  {
+    version: '007_identity_audit_outcomes',
+    file: '007_identity_audit_outcomes.sql',
+  },
 ] as const;
 
 export async function applyMigrations(database: PGlite): Promise<void> {

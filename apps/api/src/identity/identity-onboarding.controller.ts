@@ -16,6 +16,7 @@ import {
   ApiForbiddenResponse,
   ApiHeader,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { z } from 'zod';
 
@@ -88,6 +89,9 @@ const securityErrorSchema = objectSchema(
         'MFA_REQUIRED',
         'PROFESSIONAL_QUALIFICATION_REQUIRED',
         'ROLE_NOT_AUTHORIZED',
+        'INVALID_CREDENTIALS',
+        'SESSION_INVALID',
+        'SESSION_KIND_MISMATCH',
         'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED',
         'VERSION_CONFLICT',
       ],
@@ -102,6 +106,7 @@ const securityErrorSchema = objectSchema(
 @ApiHeader({ name: 'idempotency-key', required: true })
 @ApiConflictResponse({ description: 'Scoped idempotency or version conflict', schema: securityErrorSchema })
 @ApiForbiddenResponse({ description: 'Authorization, MFA, or qualification rejected', schema: securityErrorSchema })
+@ApiUnauthorizedResponse({ description: 'Credentials or session rejected', schema: securityErrorSchema })
 @Controller('api/v1')
 export class IdentityOnboardingController {
   constructor(
@@ -119,7 +124,7 @@ export class IdentityOnboardingController {
       roles: z.array(z.enum(staffRoles)),
       initialPassword: z.string(),
     }).parse(body);
-    return this.service.invite(bearerToken(headers), input, requestMeta(headers));
+    return this.service.invite(optionalBearerToken(headers), input, requestMeta(headers));
   }
 
   @Post('identity/password/change')
@@ -250,4 +255,9 @@ function bearerToken(headers: Record<string, string>) {
     });
   }
   return parsed.data.slice(7);
+}
+
+function optionalBearerToken(headers: Record<string, string>): string | null {
+  const parsed = z.string().regex(/^Bearer /).safeParse(headers.authorization);
+  return parsed.success ? parsed.data.slice(7) : null;
 }

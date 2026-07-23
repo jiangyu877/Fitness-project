@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 
 import { buildApplication } from '../src/application.js';
 import type { Environment } from '../src/config/environment.js';
@@ -85,6 +86,8 @@ describe('identity security hardening', () => {
 
     expect(await accountCount(app, 'staff-by-operations')).toBe(0);
     expect(await accountCount(app, 'user-by-admin')).toBe(0);
+    expect(await rejectedAuditCount(app, 'operations-staff', 'ROLE_NOT_AUTHORIZED')).toBe(1);
+    expect(await rejectedAuditCount(app, 'admin-user', 'ROLE_NOT_AUTHORIZED')).toBe(1);
   });
 
   it('fails closed when staff MFA is required but no server verifier is configured', async () => {
@@ -108,6 +111,7 @@ describe('identity security hardening', () => {
       .expect(({ body }) => expect(body.errorCode).toBe('MFA_VERIFIER_UNAVAILABLE'));
 
     expect(await sessionCount(app, 'mfa-staff')).toBe(0);
+    expect(await rejectedAuditCount(app, 'mfa-self-report', 'MFA_VERIFIER_UNAVAILABLE')).toBe(1);
   });
 
   it('never persists or replays a raw session token', async () => {
@@ -272,6 +276,8 @@ describe('identity security hardening', () => {
        WHERE id IN ('locked-invite', 'disabled-invite') ORDER BY status`,
     );
     expect(statuses.rows.map((row) => row.status).sort()).toEqual(['DISABLED', 'LOCKED']);
+    expect(await rejectedAuditCount(app, 'change-LOCKED', 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED')).toBe(1);
+    expect(await rejectedAuditCount(app, 'change-DISABLED', 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED')).toBe(1);
   });
 
   it('writes audit actors from the verified session instead of forged headers', async () => {
@@ -319,6 +325,11 @@ describe('identity security hardening', () => {
       .send(screening).expect(403)
       .expect(({ body }) => expect(body.errorCode).toBe('PROFESSIONAL_QUALIFICATION_REQUIRED'));
     expect(await screeningCount(app, 'screening-user')).toBe(0);
+    expect(await rejectedAuditCount(
+      app,
+      'screening-unqualified',
+      'PROFESSIONAL_QUALIFICATION_REQUIRED',
+    )).toBe(1);
 
     await app.get(DatabaseService).database.query(
       `UPDATE iam.account_role SET qualified_at=now()
@@ -382,7 +393,197 @@ describe('identity security hardening', () => {
     );
     expect(audits.rows.map((row) => row.actor_role).sort()).toEqual(['OPERATIONS', 'SYSTEM_ADMIN']);
   });
+
+  it('invalidates a staff session immediately when its active role is revoked', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'revoked-operations', 'OPERATIONS');
+    const agent = request(app.getHttpServer());
+    const token = await login(agent, 'revoked-operations', 'seed-password-1', 'OPERATIONS');
+    const database = app.get(DatabaseService).database;
+    await database.query(
+      `DELETE FROM iam.account_role
+       WHERE account_id='revoked-operations' AND role_code='OPERATIONS'`,
+    );
+
+    await agent.post('/api/v1/identity/invitations')
+      .set(writeHeaders('revoked-role-invite')).set('Authorization', `Bearer ${token}`)
+      .send(userInvitation('must-not-exist')).expect(401);
+
+    expect(await accountCount(app, 'must-not-exist')).toBe(0);
+    const sideEffects = await database.query<{ keys: number; revoked: number; rejected: number }>(`
+      SELECT
+        (SELECT count(*)::int FROM audit.idempotency_key WHERE key='revoked-role-invite') AS keys,
+        (SELECT count(*)::int FROM iam.session
+          WHERE account_id='revoked-operations' AND revoked_at IS NOT NULL) AS revoked,
+        (SELECT count(*)::int FROM audit.audit_event
+          WHERE request_id='revoked-role-invite' AND outcome='REJECTED') AS rejected
+    `);
+    expect(sideEffects.rows[0]).toEqual({ keys: 0, revoked: 1, rejected: 1 });
+  });
+
+  it('persists fingerprints made only from explicit non-secret fields', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'fingerprint-operations', 'OPERATIONS');
+    const agent = request(app.getHttpServer());
+    const token = await login(agent, 'fingerprint-operations', 'seed-password-1', 'OPERATIONS');
+    const invitation = userInvitation('fingerprint-user');
+    await agent.post('/api/v1/identity/invitations')
+      .set(writeHeaders('fingerprint-invite')).set('Authorization', `Bearer ${token}`)
+      .send(invitation).expect(201);
+    await agent.post('/api/v1/identity/invitations')
+      .set(writeHeaders('fingerprint-invite')).set('Authorization', `Bearer ${token}`)
+      .send({ ...invitation, initialPassword: 'different-secret-1' }).expect(201);
+
+    const row = await app.get(DatabaseService).database.query<{ request_fingerprint: string }>(
+      `SELECT request_fingerprint FROM audit.idempotency_key WHERE key='fingerprint-invite'`,
+    );
+    const safePayload = {
+      accountId: invitation.accountId,
+      loginIdentifier: invitation.loginIdentifier,
+      accountType: invitation.accountType,
+      roles: invitation.roles,
+    };
+    expect(row.rows[0]?.request_fingerprint).toBe(sha256(JSON.stringify(safePayload)));
+    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify(invitation)));
+    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(invitation.initialPassword));
+    expect(await accountCount(app, 'fingerprint-user')).toBe(1);
+  });
+
+  it('replays and serializes initial password change by safe idempotency scope', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedAccount(app, 'retry-invited', 'USER', 'INVITED', true);
+    const agent = request(app.getHttpServer());
+    const body = {
+      accountId: 'retry-invited',
+      currentPassword: 'seed-password-1',
+      newPassword: 'changed-password-1',
+      expectedVersion: 1,
+    };
+    const send = () => agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('retry-password')).send(body);
+
+    const concurrent = await Promise.all([send(), send()]);
+    expect(concurrent.map((response) => response.status)).toEqual([200, 200]);
+    const replay = await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('retry-password'))
+      .send({ ...body, currentPassword: 'wrong-old-secret', newPassword: 'other-new-secret' })
+      .expect(200);
+    expect(replay.body).toMatchObject({ businessStatus: 'PASSWORD_CHANGED', version: 2 });
+
+    const database = app.get(DatabaseService).database;
+    const counts = await database.query<{ version: number; audits: number }>(`
+      SELECT
+        (SELECT version FROM iam.account WHERE id='retry-invited') AS version,
+        (SELECT count(*)::int FROM audit.audit_event
+         WHERE action='PASSWORD_CHANGED' AND subject_id='retry-invited') AS audits
+    `);
+    expect(counts.rows[0]).toEqual({ version: 2, audits: 1 });
+  });
+
+  it('records structured rejection audit without trusting anonymous actor headers', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await request(app.getHttpServer()).post('/api/v1/identity/invitations')
+      .set(writeHeaders('anonymous-audit', { actorId: 'forged', actorRole: 'SYSTEM_ADMIN' }))
+      .send(userInvitation('anonymous-audit-user')).expect(401);
+    const audit = await app.get(DatabaseService).database.query<{
+      actor_id: string | null;
+      actor_role: string;
+      outcome: string;
+      error_code: string;
+    }>(`SELECT actor_id, actor_role, outcome, error_code FROM audit.audit_event
+        WHERE request_id='anonymous-audit'`);
+    expect(audit.rows).toEqual([{
+      actor_id: null,
+      actor_role: 'SYSTEM',
+      outcome: 'REJECTED',
+      error_code: 'SESSION_INVALID',
+    }]);
+    expect(await accountCount(app, 'anonymous-audit-user')).toBe(0);
+  });
+
+  it('excludes login and password secrets from persisted request fingerprints', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveUser(app, 'safe-login-user');
+    await seedAccount(app, 'safe-change-user', 'USER', 'INVITED', true);
+    const agent = request(app.getHttpServer());
+
+    await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('safe-login-key'))
+      .send({
+        loginIdentifier: 'safe-login-user',
+        password: 'seed-password-1',
+        sessionKind: 'USER',
+        mfaChallengeId: 'must-not-be-fingerprinted',
+      })
+      .expect(201);
+
+    await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('safe-change-key'))
+      .send({
+        accountId: 'safe-change-user',
+        currentPassword: 'seed-password-1',
+        newPassword: 'changed-password-1',
+        expectedVersion: 1,
+      })
+      .expect(200);
+
+    const rows = await app.get(DatabaseService).database.query<{
+      key: string;
+      request_fingerprint: string;
+    }>(
+      `SELECT key, request_fingerprint FROM audit.idempotency_key
+       WHERE key IN ('safe-login-key', 'safe-change-key') ORDER BY key`,
+    );
+    const stored = new Map(rows.rows.map((row) => [row.key, row.request_fingerprint]));
+    const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+    expect(stored.get('safe-login-key')).toBe(digest({
+      loginIdentifier: 'safe-login-user',
+      sessionKind: 'USER',
+      actingRole: 'USER',
+    }));
+    expect(stored.get('safe-change-key')).toBe(digest({
+      accountId: 'safe-change-user',
+      expectedVersion: 1,
+      actingRole: 'USER',
+    }));
+    for (const forbidden of [
+      'seed-password-1',
+      'changed-password-1',
+      'must-not-be-fingerprinted',
+    ]) {
+      expect([...stored.values()]).not.toContain(digest(forbidden));
+    }
+  });
+
+  it('audits an initial password version conflict without retaining idempotency state', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedAccount(app, 'version-conflict-user', 'USER', 'INVITED', true);
+    const agent = request(app.getHttpServer());
+
+    await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('password-version-conflict'))
+      .send({
+        accountId: 'version-conflict-user',
+        currentPassword: 'seed-password-1',
+        newPassword: 'changed-password-1',
+        expectedVersion: 2,
+      })
+      .expect(409)
+      .expect(({ body }) => expect(body.errorCode).toBe('VERSION_CONFLICT'));
+
+    expect(await rejectedAuditCount(app, 'password-version-conflict', 'VERSION_CONFLICT')).toBe(1);
+    const keys = await app.get(DatabaseService).database.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM audit.idempotency_key
+       WHERE key='password-version-conflict'`,
+    );
+    expect(keys.rows[0]?.count).toBe(0);
+  });
 });
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function writeHeaders(
   requestId: string,
@@ -522,6 +723,19 @@ async function screeningCount(target: INestApplication, userId: string): Promise
   const result = await target.get(DatabaseService).database.query<{ count: number }>(
     'SELECT count(*)::int AS count FROM care.screening_result WHERE user_id=$1',
     [userId],
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
+async function rejectedAuditCount(
+  target: INestApplication,
+  requestId: string,
+  errorCode: string,
+): Promise<number> {
+  const result = await target.get(DatabaseService).database.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM audit.audit_event
+     WHERE request_id=$1 AND outcome='REJECTED' AND error_code=$2`,
+    [requestId, errorCode],
   );
   return result.rows[0]?.count ?? 0;
 }

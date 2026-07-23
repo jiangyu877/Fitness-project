@@ -1,6 +1,7 @@
 import {
   ConflictException,
   ForbiddenException,
+  HttpException,
   Inject,
   Injectable,
   ServiceUnavailableException,
@@ -62,7 +63,7 @@ export class IdentityOnboardingService {
   ) {}
 
   async invite(
-    token: string,
+    token: string | null,
     input: {
       accountId: string;
       loginIdentifier: string;
@@ -73,15 +74,45 @@ export class IdentityOnboardingService {
     meta: RequestMeta,
   ) {
     this.requirePolicy();
-    const principal = await this.requireSession(token, 'STAFF');
-    const actorRole = this.invitationRole(principal, input);
+    if (!token) {
+      await this.appendRejectedAudit({
+        actorId: null,
+        actorRole: 'SYSTEM',
+        action: 'ACCOUNT_INVITATION_REJECTED',
+        subjectType: 'ACCOUNT',
+        subjectId: input.accountId,
+        requestId: meta.requestId,
+        errorCode: 'SESSION_INVALID',
+      });
+      throw new UnauthorizedException(this.error(meta, 'SESSION_INVALID', ['LOGIN']));
+    }
+    const principal = await this.requireSession(token, 'STAFF', meta);
+    let actorRole: 'OPERATIONS' | 'SYSTEM_ADMIN';
+    try {
+      actorRole = this.invitationRole(principal, input);
+    } catch (error) {
+      await this.auditAuthenticatedRejection(
+        principal,
+        'ACCOUNT_INVITATION_REJECTED',
+        'ACCOUNT',
+        input.accountId,
+        meta,
+        error,
+      );
+      throw error;
+    }
     const passwordHash = await hashPassword(input.initialPassword, this.policy!);
     return this.write({
       meta,
       operation: 'IDENTITY_INVITE',
       principal,
       actorRole,
-      fingerprintPayload: input,
+      fingerprintPayload: {
+        accountId: input.accountId,
+        loginIdentifier: input.loginIdentifier,
+        accountType: input.accountType,
+        roles: input.roles,
+      },
       action: 'ACCOUNT_INVITED',
       subjectType: 'ACCOUNT',
       subjectId: input.accountId,
@@ -119,44 +150,84 @@ export class IdentityOnboardingService {
   ) {
     this.requirePolicy();
     const account = await this.accountById(input.accountId);
-    if (!account || !await verifyPassword(input.currentPassword, account.password_hash)) {
+    if (!account) {
       throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
-    }
-    if (account.status !== 'INVITED' || !account.initial_password_change_required) {
-      throw new ConflictException(this.error(meta, 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED'));
     }
     const principal = await this.principalForAccount(account);
     const actorRole = this.resolveCredentialRole(principal, input.actingRole);
-    const passwordHash = await hashPassword(input.newPassword, this.policy!);
-    return this.write({
+    const operation = 'IDENTITY_INITIAL_PASSWORD_CHANGE';
+    const principalScope = this.principalScope(principal, actorRole);
+    const fingerprintPayload = {
+      accountId: input.accountId,
+      expectedVersion: input.expectedVersion,
+      actingRole: actorRole,
+    };
+    const replay = await this.readCompletedReplay(
       meta,
-      operation: 'IDENTITY_INITIAL_PASSWORD_CHANGE',
-      principal,
-      actorRole,
-      fingerprintPayload: input,
-      action: 'PASSWORD_CHANGED',
-      subjectType: 'ACCOUNT',
-      subjectId: account.id,
-      execute: async (tx) => {
-        const result = await tx.query<{ version: number }>(
-          `UPDATE iam.account
-           SET password_hash=$1, initial_password_change_required=false,
-               status='ACTIVE', password_changed_at=now(), version=version+1
-           WHERE id=$2 AND version=$3 AND status='INVITED'
-             AND initial_password_change_required=true
-           RETURNING version`,
-          [passwordHash, account.id, input.expectedVersion],
+      operation,
+      principalScope,
+      this.fingerprint(fingerprintPayload),
+    );
+    if (replay) return replay;
+    if (!await verifyPassword(input.currentPassword, account.password_hash)) {
+      throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
+    }
+    if (account.status !== 'INVITED' || !account.initial_password_change_required) {
+      await this.appendRejectedAudit({
+        actorId: account.id,
+        actorRole,
+        action: 'PASSWORD_CHANGE_REJECTED',
+        subjectType: 'ACCOUNT',
+        subjectId: account.id,
+        requestId: meta.requestId,
+        errorCode: 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED',
+      });
+      throw new ConflictException(this.error(meta, 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED'));
+    }
+    const passwordHash = await hashPassword(input.newPassword, this.policy!);
+    try {
+      return await this.write({
+        meta,
+        operation,
+        principal,
+        actorRole,
+        fingerprintPayload,
+        action: 'PASSWORD_CHANGED',
+        subjectType: 'ACCOUNT',
+        subjectId: account.id,
+        execute: async (tx) => {
+          const result = await tx.query<{ version: number }>(
+            `UPDATE iam.account
+             SET password_hash=$1, initial_password_change_required=false,
+                 status='ACTIVE', password_changed_at=now(), version=version+1
+             WHERE id=$2 AND version=$3 AND status='INVITED'
+               AND initial_password_change_required=true
+             RETURNING version`,
+            [passwordHash, account.id, input.expectedVersion],
+          );
+          if (!result.rows[0]) {
+            throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+          }
+          return {
+            businessStatus: 'PASSWORD_CHANGED',
+            requestId: meta.requestId,
+            version: result.rows[0].version,
+          };
+        },
+      });
+    } catch (error) {
+      if (this.errorCodeFrom(error) === 'VERSION_CONFLICT') {
+        await this.auditAuthenticatedRejection(
+          { ...principal, activeRole: actorRole },
+          'PASSWORD_CHANGE_REJECTED',
+          'ACCOUNT',
+          account.id,
+          meta,
+          error,
         );
-        if (!result.rows[0]) {
-          throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
-        }
-        return {
-          businessStatus: 'PASSWORD_CHANGED',
-          requestId: meta.requestId,
-          version: result.rows[0].version,
-        };
-      },
-    });
+      }
+      throw error;
+    }
   }
 
   async login(
@@ -186,12 +257,25 @@ export class IdentityOnboardingService {
     const principal = await this.principalForAccount(account);
     const actorRole = this.resolveCredentialRole(principal, input.actingRole);
     principal.activeRole = actorRole;
-    const mfaVerified = await this.verifyMfa(principal, input.mfaChallengeId);
+    let mfaVerified: boolean;
+    try {
+      mfaVerified = await this.verifyMfa(principal, input.mfaChallengeId);
+    } catch (error) {
+      await this.auditAuthenticatedRejection(
+        principal,
+        'SESSION_CREATION_REJECTED',
+        'ACCOUNT',
+        account.id,
+        meta,
+        error,
+      );
+      throw error;
+    }
     return this.createSession(principal, actorRole, input, mfaVerified, meta);
   }
 
   async acceptConsent(token: string, consentVersion: string, meta: RequestMeta) {
-    const principal = await this.requireSession(token, 'USER');
+    const principal = await this.requireSession(token, 'USER', meta);
     const consentId = randomUUID();
     return this.write({
       meta,
@@ -220,7 +304,7 @@ export class IdentityOnboardingService {
   }
 
   async withdrawConsent(token: string, consentId: string, expectedVersion: number, meta: RequestMeta) {
-    const principal = await this.requireSession(token, 'USER');
+    const principal = await this.requireSession(token, 'USER', meta);
     return this.write({
       meta,
       operation: 'ONBOARDING_CONSENT_WITHDRAW',
@@ -258,7 +342,7 @@ export class IdentityOnboardingService {
     expectedVersion: number,
     meta: RequestMeta,
   ) {
-    const principal = await this.requireSession(token, 'STAFF');
+    const principal = await this.requireSession(token, 'STAFF', meta);
     this.requireRole(principal, 'SYSTEM_ADMIN');
     return this.write({
       meta,
@@ -305,7 +389,7 @@ export class IdentityOnboardingService {
     data: Record<string, unknown>,
     meta: RequestMeta,
   ) {
-    const principal = await this.requireSession(token, 'USER');
+    const principal = await this.requireSession(token, 'USER', meta);
     return this.write({
       meta,
       operation: 'ONBOARDING_PROFILE_STEP_SAVE',
@@ -329,8 +413,21 @@ export class IdentityOnboardingService {
     },
     meta: RequestMeta,
   ) {
-    const principal = await this.requireSession(token, 'STAFF');
-    const actorRole = this.qualifiedReviewerRole(principal);
+    const principal = await this.requireSession(token, 'STAFF', meta);
+    let actorRole: 'NUTRITION_REVIEWER' | 'TRAINING_REVIEWER';
+    try {
+      actorRole = this.qualifiedReviewerRole(principal);
+    } catch (error) {
+      await this.auditAuthenticatedRejection(
+        principal,
+        'SCREENING_RECORD_REJECTED',
+        'SCREENING',
+        input.userId,
+        meta,
+        error,
+      );
+      throw error;
+    }
     return this.write({
       meta,
       operation: 'ONBOARDING_SCREENING_RECORD',
@@ -365,7 +462,11 @@ export class IdentityOnboardingService {
   ) {
     const operation = 'IDENTITY_SESSION_CREATE';
     const principalScope = this.principalScope(principal, actorRole);
-    const fingerprint = this.fingerprint(input);
+    const fingerprint = this.fingerprint({
+      loginIdentifier: input.loginIdentifier,
+      sessionKind: input.sessionKind,
+      actingRole: actorRole,
+    });
     const credential = generateSessionCredential();
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + this.policy!.sessionTtlSeconds * 1000);
@@ -400,6 +501,7 @@ export class IdentityOnboardingService {
         subjectType: 'ACCOUNT',
         subjectId: principal.accountId,
         requestId: meta.requestId,
+        outcome: 'SUCCEEDED',
       });
       return projection;
     });
@@ -441,6 +543,9 @@ export class IdentityOnboardingService {
         subjectType: input.subjectType,
         subjectId: input.subjectId,
         requestId: input.meta.requestId,
+        outcome: 'SUCCEEDED',
+        beforeVersionId: this.outputVersion(input.fingerprintPayload, 'expectedVersion'),
+        afterVersionId: this.outputVersion(output, 'version'),
       });
       return output;
     });
@@ -507,13 +612,84 @@ export class IdentityOnboardingService {
     subjectType: string;
     subjectId: string;
     requestId: string;
+    outcome?: 'SUCCEEDED' | 'REJECTED';
+    errorCode?: string | null;
+    beforeVersionId?: string | null;
+    afterVersionId?: string | null;
   }) {
     await tx.query(
       `INSERT INTO audit.audit_event
-         (id, actor_id, actor_role, action, subject_type, subject_id, request_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [randomUUID(), input.actorId, input.actorRole, input.action, input.subjectType, input.subjectId, input.requestId],
+         (id, actor_id, actor_role, action, subject_type, subject_id, request_id,
+          outcome, error_code, before_version_id, after_version_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        randomUUID(), input.actorId, input.actorRole, input.action, input.subjectType,
+        input.subjectId, input.requestId, input.outcome ?? 'SUCCEEDED', input.errorCode ?? null,
+        input.beforeVersionId ?? null, input.afterVersionId ?? null,
+      ],
     );
+  }
+
+  private async appendRejectedAudit(input: {
+    actorId: string | null;
+    actorRole: ActorRole;
+    action: string;
+    subjectType: string;
+    subjectId: string;
+    requestId: string;
+    errorCode: string;
+  }) {
+    await this.db.database.transaction((tx) => this.appendAudit(tx, {
+      ...input,
+      outcome: 'REJECTED',
+    }));
+  }
+
+  private async auditAuthenticatedRejection(
+    principal: Principal,
+    action: string,
+    subjectType: string,
+    subjectId: string,
+    meta: RequestMeta,
+    error: unknown,
+  ) {
+    await this.appendRejectedAudit({
+      actorId: principal.accountId,
+      actorRole: principal.activeRole ?? 'SYSTEM',
+      action,
+      subjectType,
+      subjectId,
+      requestId: meta.requestId,
+      errorCode: this.errorCodeFrom(error),
+    });
+  }
+
+  private errorCodeFrom(error: unknown): string {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (response && typeof response === 'object') {
+        const code = (response as Record<string, unknown>).errorCode;
+        if (typeof code === 'string') return code;
+      }
+    }
+    return 'WRITE_REJECTED';
+  }
+
+  private async readCompletedReplay<T>(
+    meta: RequestMeta,
+    operation: string,
+    principalScope: string,
+    fingerprint: string,
+  ): Promise<T | null> {
+    const found = await this.db.database.query<IdempotencyRow>(
+      `SELECT operation, principal_scope, request_fingerprint, result
+       FROM audit.idempotency_key WHERE key=$1`,
+      [meta.idempotencyKey],
+    );
+    const existing = found.rows[0];
+    if (!existing) return null;
+    this.assertIdempotencyScope(existing, operation, principalScope, fingerprint, meta);
+    return this.parseJson(existing.result) as T;
   }
 
   private async recordFailedLogin(accountId: string, meta: RequestMeta) {
@@ -541,6 +717,8 @@ export class IdentityOnboardingService {
         subjectType: 'ACCOUNT',
         subjectId: accountId,
         requestId: meta.requestId,
+        outcome: 'REJECTED',
+        errorCode: locked ? 'ACCOUNT_LOCKED' : 'INVALID_CREDENTIALS',
       });
     });
   }
@@ -683,10 +861,14 @@ export class IdentityOnboardingService {
     return true;
   }
 
-  private async requireSession(token: string, kind: 'USER' | 'STAFF'): Promise<Principal> {
+  private async requireSession(
+    token: string,
+    kind: 'USER' | 'STAFF',
+    meta: RequestMeta,
+  ): Promise<Principal> {
     const tokenHash = createHash('sha256').update(token).digest('hex');
-    const result = await this.db.database.query<{ account_id: string; session_kind: string; active_role: ActorRole | null }>(
-      `SELECT s.account_id, s.session_kind, s.active_role
+    const result = await this.db.database.query<{ id: string; account_id: string; session_kind: string; active_role: ActorRole | null }>(
+      `SELECT s.id, s.account_id, s.session_kind, s.active_role
        FROM iam.session s
        JOIN iam.account a ON a.id=s.account_id
        WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now()
@@ -703,7 +885,28 @@ export class IdentityOnboardingService {
     }
     const account = await this.accountById(session.account_id);
     if (!account) throw new UnauthorizedException({ errorCode: 'SESSION_INVALID' });
-    return this.principalForAccount(account, session.active_role);
+    const principal = await this.principalForAccount(account, session.active_role);
+    if (kind === 'STAFF' && !this.hasRole(principal, session.active_role as StaffRole)) {
+      await this.db.database.transaction(async (tx) => {
+        await tx.query(`UPDATE iam.session SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, [session.id]);
+        await this.appendAudit(tx, {
+          actorId: session.account_id,
+          actorRole: session.active_role as StaffRole,
+          action: 'SESSION_ROLE_REVOKED',
+          subjectType: 'SESSION',
+          subjectId: session.id,
+          requestId: meta.requestId,
+          outcome: 'REJECTED',
+          errorCode: 'SESSION_INVALID',
+        });
+      });
+      throw new UnauthorizedException({
+        businessStatus: 'SESSION_INVALID',
+        errorCode: 'SESSION_INVALID',
+        recoverableActions: ['LOGIN'],
+      });
+    }
+    return principal;
   }
 
   private async principalForAccount(account: AccountRow, activeRole: ActorRole | null = null): Promise<Principal> {
@@ -738,6 +941,12 @@ export class IdentityOnboardingService {
 
   private parseJson(value: unknown): unknown {
     return typeof value === 'string' ? JSON.parse(value) : value;
+  }
+
+  private outputVersion(value: unknown, field: string): string | null {
+    if (!value || typeof value !== 'object') return null;
+    const version = (value as Record<string, unknown>)[field];
+    return typeof version === 'number' || typeof version === 'string' ? String(version) : null;
   }
 
   private requirePolicy() {

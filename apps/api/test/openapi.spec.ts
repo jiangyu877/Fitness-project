@@ -56,6 +56,7 @@ describe('OpenAPI contract', () => {
       expect.objectContaining({ name: 'x-actor-role' }),
     ]));
     expect(invitation?.security).toEqual(expect.arrayContaining([expect.objectContaining({ bearer: [] })]));
+    expect(invitation?.responses).toHaveProperty('401');
     expect(document.paths['/api/v1/onboarding/screening-results']?.post?.requestBody).toBeDefined();
     expect(JSON.stringify(document.paths['/api/v1/identity/sessions'])).not.toContain('mfaVerified');
     expect(JSON.stringify(document.paths['/api/v1/identity/sessions'])).toContain('actingRole');
@@ -64,6 +65,10 @@ describe('OpenAPI contract', () => {
       'LOGIN_REPLAY_REQUIRES_REAUTHENTICATION',
       'MFA_VERIFIER_UNAVAILABLE',
       'PROFESSIONAL_QUALIFICATION_REQUIRED',
+      'INVALID_CREDENTIALS',
+      'SESSION_INVALID',
+      'SESSION_KIND_MISMATCH',
+      'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED',
     ]) expect(serialized).toContain(errorCode);
     for (const blocker of [
       'DEMO_MODE_ACTIVE',

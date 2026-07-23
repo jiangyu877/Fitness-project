@@ -89,6 +89,19 @@ describe('core database migration', () => {
     `)).resolves.toBeDefined();
   });
 
+  it('adds structured audit outcomes without changing released migrations', async () => {
+    database = new PGlite();
+    await applyMigrations(database);
+    const columns = await database.query<{ column_name: string }>(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema='audit' AND table_name='audit_event'
+    `);
+    expect(columns.rows.map((row) => row.column_name)).toEqual(expect.arrayContaining([
+      'outcome',
+      'error_code',
+    ]));
+  });
+
   it('enforces unique login identifiers', async () => {
     database = new PGlite();
     await applyMigrations(database);
