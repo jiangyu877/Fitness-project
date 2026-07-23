@@ -25,6 +25,7 @@ import { demoPersonas, prototypeDisclaimer, type DemoPersona } from '../mocks/pe
 import { pageCatalog, type PageDefinition } from '../mocks/page-catalog.js';
 import { PlanDemoPage } from '../features/plan-demo/plan-demo-page.js';
 import { ReviewDetailPage } from '../features/review/review-detail-page.js';
+import { Phase3Page } from '../features/phase3/phase3-pages.js';
 import { resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -130,7 +131,7 @@ function H5Shell({ page }: { page: PageDefinition }) {
   return (
     <div className="h5-viewport">
       <main className="h5-main">
-        {isToday ? <H5Today /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
+        {isToday ? <H5Today /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
       </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         <MobileNavItem to="/h5/today" label="今日" icon={<Home />} active={isToday} />
@@ -140,6 +141,11 @@ function H5Shell({ page }: { page: PageDefinition }) {
       </nav>
     </div>
   );
+}
+
+function phase3Kind(page: PageDefinition): string | undefined {
+  const map: Record<string,string> = {'H5-ONB-01':'consent','H5-ONB-02':'screening','H5-ONB-03':'profile','H5-REC-02':'diet','H5-REC-03':'training-live','H5-REC-04':'training-retro','H5-REC-05':'weekly-feedback','H5-SAF-01':'safety','H5-P1-MSG-01':'messages','H5-P1-DATA-01':'data','WEB-WQ-01':'queue','WEB-USR-01':'user','WEB-RSK-02':'risk','WEB-ADJ-01':'adjustment'};
+  return map[page.id];
 }
 
 function MobileNavItem({ to, label, icon, active }: { to: string; label: string; icon: React.ReactNode; active: boolean }) {
