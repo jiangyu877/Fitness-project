@@ -6,3 +6,15 @@ desktop.ini
 
 # Local brainstorming previews and server state
 .superpowers/
+
+# Node.js build and dependency output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and embedded database files
+.env
+.env.*
+!.env.example
+.local/
