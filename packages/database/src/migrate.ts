@@ -14,6 +14,10 @@ const migrations = [
     version: '003_plan_repository',
     url: new URL('../migrations/003_plan_repository.sql', import.meta.url),
   },
+  {
+    version: '004_plan_repository_integrity',
+    url: new URL('../migrations/004_plan_repository_integrity.sql', import.meta.url),
+  },
 ] as const;
 
 export async function applyMigrations(database: PGlite): Promise<void> {

@@ -42,6 +42,7 @@ describe('persistent plan repository', () => {
       idempotencyKey: 'request-1',
       requestId: 'req-1',
       actorId: 'operator-1',
+      actorRole: 'OPERATIONS',
       action: 'PLAN_CREATED',
       subjectId: 'version-1',
       result: { status: 'DRAFT' },
@@ -50,17 +51,77 @@ describe('persistent plan repository', () => {
       idempotencyKey: 'request-1',
       requestId: 'req-2',
       actorId: 'operator-1',
+      actorRole: 'OPERATIONS',
       action: 'PLAN_CREATED',
       subjectId: 'version-1',
       result: { status: 'CHANGED' },
     });
 
-    expect(replay).toEqual({ ...first, replayed: true });
+    expect(first).toEqual({ id: 'req-1', result: { status: 'DRAFT' }, replayed: false });
+    expect(replay).toEqual({ id: 'req-1', result: { status: 'DRAFT' }, replayed: true });
     const audit = await repository.listAudit('version-1');
     expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ requestId: 'req-1', action: 'PLAN_CREATED' });
+    expect(audit[0]).toMatchObject({
+      requestId: 'req-1',
+      action: 'PLAN_CREATED',
+      actorRole: 'OPERATIONS',
+    });
+  });
+
+  it('allows exactly one concurrent save for the same expected version', async () => {
+    const repository = await setup();
+    await createVersion(repository);
+
+    const results = await Promise.allSettled([
+      repository.save('version-1', 1, { status: 'IN_REVIEW' }),
+      repository.save('version-1', 1, { status: 'STAFF_REVISION_REQUIRED' }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: { code: 'VERSION_CONFLICT', latestRecordVersion: 2 },
+    });
+  });
+
+  it('rolls back the idempotency key when audit insertion fails', async () => {
+    const repository = await setup();
+    await database!.query(`
+      INSERT INTO audit.audit_event (
+        id, actor_id, actor_role, action, subject_type, subject_id, request_id
+      ) VALUES ('duplicate-request', 'operator-1', 'OPERATIONS', 'EXISTING', 'PLAN_VERSION', 'other', 'duplicate-request')
+    `);
+
+    await expect(repository.recordWrite({
+      idempotencyKey: 'rollback-key',
+      requestId: 'duplicate-request',
+      actorId: 'operator-1',
+      actorRole: 'OPERATIONS',
+      action: 'PLAN_CREATED',
+      subjectId: 'version-1',
+      result: { status: 'DRAFT' },
+    })).rejects.toThrow();
+
+    const keys = await database!.query(`
+      SELECT key FROM audit.idempotency_key WHERE key = 'rollback-key'
+    `);
+    expect(keys.rows).toHaveLength(0);
   });
 });
+
+async function createVersion(repository: PGlitePlanRepository) {
+  return repository.create({
+    id: 'version-1',
+    planId: 'plan-1',
+    userId: 'user-1',
+    versionNumber: 1,
+    status: 'DRAFT',
+    confirmationDeadlineAt: new Date('2026-08-09T12:00:00Z'),
+    effectiveAt: new Date('2026-08-10T00:00:00Z'),
+    effectiveTo: null,
+    payload: { contentMode: 'REVIEWED' },
+  });
+}
 
 async function setup() {
   database = new PGlite();
