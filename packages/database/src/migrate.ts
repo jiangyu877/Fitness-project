@@ -4,19 +4,23 @@ import { readFile } from 'node:fs/promises';
 const migrations = [
   {
     version: '001_core',
-    url: new URL('../migrations/001_core.sql', import.meta.url),
+    file: '001_core.sql',
   },
   {
     version: '002_plan_lifecycle_guards',
-    url: new URL('../migrations/002_plan_lifecycle_guards.sql', import.meta.url),
+    file: '002_plan_lifecycle_guards.sql',
   },
   {
     version: '003_plan_repository',
-    url: new URL('../migrations/003_plan_repository.sql', import.meta.url),
+    file: '003_plan_repository.sql',
   },
   {
     version: '004_plan_repository_integrity',
-    url: new URL('../migrations/004_plan_repository_integrity.sql', import.meta.url),
+    file: '004_plan_repository_integrity.sql',
+  },
+  {
+    version: '005_identity_onboarding',
+    file: '005_identity_onboarding.sql',
   },
 ] as const;
 
@@ -37,7 +41,7 @@ export async function applyMigrations(database: PGlite): Promise<void> {
       continue;
     }
 
-    const sql = await readFile(migration.url, 'utf8');
+    const sql = await readMigration(migration.file);
     await database.exec('BEGIN');
     try {
       await database.exec(sql);
@@ -50,5 +54,14 @@ export async function applyMigrations(database: PGlite): Promise<void> {
       await database.exec('ROLLBACK');
       throw error;
     }
+  }
+}
+
+async function readMigration(file: string): Promise<string> {
+  try {
+    return await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return readFile(new URL(`../../migrations/${file}`, import.meta.url), 'utf8');
   }
 }

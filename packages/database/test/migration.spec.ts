@@ -26,9 +26,11 @@ describe('core database migration', () => {
       expect.arrayContaining([
         { table_schema: 'audit', table_name: 'audit_event' },
         { table_schema: 'care', table_name: 'consent_record' },
+        { table_schema: 'care', table_name: 'screening_result' },
         { table_schema: 'care', table_name: 'user_profile' },
         { table_schema: 'iam', table_name: 'account' },
         { table_schema: 'iam', table_name: 'role' },
+        { table_schema: 'iam', table_name: 'session' },
         { table_schema: 'planning', table_name: 'plan' },
         { table_schema: 'planning', table_name: 'plan_version' },
       ]),
@@ -38,6 +40,24 @@ describe('core database migration', () => {
       SELECT * FROM planning.professional_rule_version
     `);
     expect(professionalRows.rows).toHaveLength(0);
+  });
+
+  it('constrains screening to trusted conclusion-only records', async () => {
+    database = new PGlite();
+    await applyMigrations(database);
+    await database.exec(`
+      INSERT INTO iam.account (id, login_identifier, password_hash, account_type)
+      VALUES ('screen-user', 'screen-user', 'hash', 'USER'),
+             ('screen-reviewer', 'screen-reviewer', 'hash', 'STAFF');
+    `);
+
+    await expect(database.query(`
+      INSERT INTO care.screening_result
+        (id, user_id, conclusion, source, recorded_by, actor_role)
+      VALUES
+        ('bad-screen', 'screen-user', 'DIAGNOSED', 'CLIENT_THRESHOLD',
+         'screen-reviewer', 'OPERATIONS')
+    `)).rejects.toThrow();
   });
 
   it('enforces unique login identifiers', async () => {

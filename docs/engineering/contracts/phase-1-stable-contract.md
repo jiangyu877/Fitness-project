@@ -1,13 +1,13 @@
-# Phase 1 And 2 Stable Contract
+# Stable Engineering Contract
 
-Version: 0.2.0
+Version: 0.3.0
 Date: 2026-07-23
 Owner: R&D
 Status: Implemented testable engineering slices; not approved for real-user service
 
 ## Scope
 
-This contract is the stable integration surface available to UI through Phase 2. It does not replace `docs/product/lianban-v1.0-prd.md` and does not claim that the full V1.0 business API exists.
+This contract is the stable integration surface available through the current identity/onboarding slice. It does not replace `docs/product/lianban-v1.0-prd.md` and does not claim that the full V1.0 business API exists.
 
 The implementation intentionally contains no screening questions, risk thresholds, nutrition values, training values, or weekly-adjustment rules. Those inputs remain release blockers until their professional approvals are recorded.
 
@@ -26,17 +26,41 @@ This endpoint proves that the HTTP process is responding. It does not imply that
 ```json
 {
   "readyForRealUsers": false,
-  "blockers": ["PROFESSIONAL_RULES_UNAPPROVED"]
+  "blockers": ["AUTH_SECURITY_POLICY_UNAPPROVED", "PRIVACY_REVIEW_UNAPPROVED"]
 }
 ```
 
-Stable blocker in this slice:
+Stable blockers are:
 
 | Code | Meaning | UI behavior |
 | --- | --- | --- |
-| `PROFESSIONAL_RULES_UNAPPROVED` | Required professional inputs have not been approved | Block real-user publication and show the controlled unavailable state |
+| `DEMO_MODE_ACTIVE` | Demo mode is enabled | Never treat demo fixtures as real-user service |
+| `PROFESSIONAL_RULES_UNAPPROVED` | Required professional inputs have not been approved | Block real-user publication |
+| `AUTH_SECURITY_POLICY_UNAPPROVED` | Authentication policy lacks approval evidence | Block identity production paths |
+| `PRIVACY_REVIEW_UNAPPROVED` | Privacy review lacks approval evidence | Block real-user onboarding |
+| `DATA_RIGHTS_DRILL_INCOMPLETE` | Data-rights drill lacks completion evidence | Block real-user readiness |
+| `BACKUP_RESTORE_DRILL_INCOMPLETE` | Backup/restore drill lacks completion evidence | Block real-user readiness |
+| `OPERATIONS_READINESS_INCOMPLETE` | Operations approval evidence is absent | Block real-user readiness |
+| `DEPLOYMENT_SECURITY_UNAPPROVED` | Deployment security approval evidence is absent | Block real-user readiness |
 
-Clients must branch on codes, not free text. An empty `blockers` array is only a technical representation; product release gates and operational approvals still apply independently.
+Clients must branch on codes, not free text. `readyForRealUsers` is true only when demo mode is off and all seven external evidence flags are explicitly true. Flags and injected test policies only exercise the contract; they are not approval evidence and must not be promoted into production configuration without the governed records required by the product readiness attachment.
+
+### Identity and onboarding API
+
+The migration-backed slice exposes:
+
+- `POST /api/v1/identity/invitations` and `POST /api/v1/identity/password/change` for invited accounts and mandatory first password change;
+- `POST /api/v1/identity/sessions` for isolated `USER` or `STAFF` sessions;
+- `POST /api/v1/identity/accounts/{id}/status` for `SYSTEM_ADMIN` lock/disable with immediate session revocation;
+- consent acceptance and versioned withdrawal under `/api/v1/onboarding/consents`;
+- versioned step drafts at `PUT /api/v1/onboarding/profile/steps/{step}`;
+- trusted conclusion-only screening writes at `POST /api/v1/onboarding/screening-results`.
+
+Every write requires `x-request-id`, `idempotency-key`, `x-actor-id`, and `x-actor-role`. Authenticated writes additionally require a bearer session. Passwords use policy-configured scrypt, session tokens are random and stored only as SHA-256 digests, successful login clears failure count, and reaching the configured failure threshold locks the account and revokes sessions. The threshold, TTL, MFA requirement, and password parameters are injected approved-policy inputs, not hard-coded product decisions.
+
+Screening accepts only `PASS`, `HUMAN_REVIEW`, or `EXCLUDED`, from `PROFESSIONAL_RULE` or `MANUAL_REVIEW`, and only nutrition/training reviewers may record it. It contains no questions, client thresholds, or diagnosis.
+
+The invitation route currently trusts explicit actor metadata as local/test bootstrap scaffolding. Production use remains blocked until a governed initial-admin mechanism, approved MFA verification, password reset/recovery, secret management, privacy/data-rights operations, and approval evidence wiring exist.
 
 ### `GET /api/v1/demo/personas/{fixtureId}`
 
@@ -104,7 +128,7 @@ Phase 3 adds `packages/database/src/plan-repository.ts` as a tested PGlite/Postg
 
 ## OpenAPI
 
-The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes stable fixture, goal, review, readiness, plan status, transition, current/gap, and conflict enums. It contains no authentication secrets or professional placeholder values.
+The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes stable identity/onboarding paths, required write headers, request shapes, all eight readiness blockers, fixture, goal, review, plan status, transition, current/gap, and conflict enums. It contains no secret examples or professional placeholder values.
 
 ## Domain And Database Guarantees
 
@@ -135,7 +159,8 @@ These guarantees are currently covered by domain and migration tests. The full p
 The following remain outside this implementation and continue to block real-user testing or production deployment as applicable:
 
 - professional sign-off for screening, risk, nutrition, training, and weekly-adjustment rules;
-- production authentication parameters and credential lifecycle controls;
+- production approval evidence for authentication parameters, initial administrator bootstrap, MFA verification, and password recovery;
+- data export/deletion operations and completed data-rights drill evidence;
 - deployment region, budget, secret management, backup target, and monitoring integration;
 - CI repository policy and protected release workflow;
 - the remaining PRD HTTP resources and end-to-end acceptance flows.
