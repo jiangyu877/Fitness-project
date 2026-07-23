@@ -5,6 +5,7 @@ describe('phase 3 demo state model', () => {
   it('blocks screening until consent and routes risk to human review', () => {
     expect(phase3Model.consent.canContinue(false)).toBe(false);
     expect(phase3Model.consent.canContinue(true)).toBe(true);
+    expect(phase3Model.screening.resolve('pass')).toBe('approved');
     expect(phase3Model.screening.resolve('risk')).toBe('human-review');
     expect(phase3Model.screening.resolve('exclude')).toBe('stopped');
   });
@@ -13,7 +14,8 @@ describe('phase 3 demo state model', () => {
     expect(phase3Model.today.tasks('pending-confirmation')).toEqual([]);
     expect(phase3Model.today.tasks('confirmation-timeout')).toEqual([]);
     expect(phase3Model.today.tasks('plan-gap')).toEqual([]);
-    expect(phase3Model.today.tasks('scheduled')).toContain('diet');
+    expect(phase3Model.today.tasks('scheduled')).toEqual([]);
+    expect(phase3Model.today.tasks('active')).toEqual(['diet', 'training']);
     expect(phase3Model.today.tasks('risk-paused')).toEqual(['diet']);
   });
 
