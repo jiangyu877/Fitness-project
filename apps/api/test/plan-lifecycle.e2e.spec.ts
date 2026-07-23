@@ -12,6 +12,10 @@ const approvedEnvironment: Environment = {
   professionalRulesApproved: true,
   authSecurityPolicyApproved: true,
   privacyReviewApproved: true,
+  dataRightsDrillComplete: true,
+  backupRestoreDrillComplete: true,
+  operationsReadinessApproved: true,
+  deploymentSecurityApproved: true,
 };
 
 const effectiveAt = '2026-08-10T00:00:00.000Z';

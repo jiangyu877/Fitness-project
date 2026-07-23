@@ -21,9 +21,14 @@ export class ReadinessController {
           items: {
             type: 'string',
             enum: [
+              'DEMO_MODE_ACTIVE',
               'PROFESSIONAL_RULES_UNAPPROVED',
               'AUTH_SECURITY_POLICY_UNAPPROVED',
               'PRIVACY_REVIEW_UNAPPROVED',
+              'DATA_RIGHTS_DRILL_INCOMPLETE',
+              'BACKUP_RESTORE_DRILL_INCOMPLETE',
+              'OPERATIONS_READINESS_INCOMPLETE',
+              'DEPLOYMENT_SECURITY_UNAPPROVED',
             ],
           },
         },
@@ -35,6 +40,7 @@ export class ReadinessController {
     blockers: ReadinessBlocker[];
   } {
     const blockers: ReadinessBlocker[] = [];
+    if (this.environment.demoMode) blockers.push('DEMO_MODE_ACTIVE');
     if (!this.environment.professionalRulesApproved) {
       blockers.push('PROFESSIONAL_RULES_UNAPPROVED');
     }
@@ -43,6 +49,18 @@ export class ReadinessController {
     }
     if (!this.environment.privacyReviewApproved) {
       blockers.push('PRIVACY_REVIEW_UNAPPROVED');
+    }
+    if (!this.environment.dataRightsDrillComplete) {
+      blockers.push('DATA_RIGHTS_DRILL_INCOMPLETE');
+    }
+    if (!this.environment.backupRestoreDrillComplete) {
+      blockers.push('BACKUP_RESTORE_DRILL_INCOMPLETE');
+    }
+    if (!this.environment.operationsReadinessApproved) {
+      blockers.push('OPERATIONS_READINESS_INCOMPLETE');
+    }
+    if (!this.environment.deploymentSecurityApproved) {
+      blockers.push('DEPLOYMENT_SECURITY_UNAPPROVED');
     }
 
     return {
@@ -53,6 +71,11 @@ export class ReadinessController {
 }
 
 type ReadinessBlocker =
+  | 'DEMO_MODE_ACTIVE'
   | 'PROFESSIONAL_RULES_UNAPPROVED'
   | 'AUTH_SECURITY_POLICY_UNAPPROVED'
-  | 'PRIVACY_REVIEW_UNAPPROVED';
+  | 'PRIVACY_REVIEW_UNAPPROVED'
+  | 'DATA_RIGHTS_DRILL_INCOMPLETE'
+  | 'BACKUP_RESTORE_DRILL_INCOMPLETE'
+  | 'OPERATIONS_READINESS_INCOMPLETE'
+  | 'DEPLOYMENT_SECURITY_UNAPPROVED';

@@ -20,6 +20,10 @@ describe('OpenAPI contract', () => {
       professionalRulesApproved: false,
       authSecurityPolicyApproved: false,
       privacyReviewApproved: false,
+      dataRightsDrillComplete: false,
+      backupRestoreDrillComplete: false,
+      operationsReadinessApproved: false,
+      deploymentSecurityApproved: false,
     });
 
     const document = createOpenApiDocument(app);

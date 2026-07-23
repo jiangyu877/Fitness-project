@@ -14,6 +14,10 @@ const environmentSchema = z
     PROFESSIONAL_RULES_APPROVED: booleanString,
     AUTH_SECURITY_POLICY_APPROVED: booleanString,
     PRIVACY_REVIEW_APPROVED: booleanString,
+    DATA_RIGHTS_DRILL_COMPLETE: booleanString,
+    BACKUP_RESTORE_DRILL_COMPLETE: booleanString,
+    OPERATIONS_READINESS_APPROVED: booleanString,
+    DEPLOYMENT_SECURITY_APPROVED: booleanString,
   })
   .superRefine((environment, context) => {
     if (environment.DEMO_MODE && environment.NODE_ENV === 'production') {
@@ -33,6 +37,10 @@ export type Environment = {
   professionalRulesApproved: boolean;
   authSecurityPolicyApproved: boolean;
   privacyReviewApproved: boolean;
+  dataRightsDrillComplete: boolean;
+  backupRestoreDrillComplete: boolean;
+  operationsReadinessApproved: boolean;
+  deploymentSecurityApproved: boolean;
 };
 
 export function parseEnvironment(input: Record<string, string | undefined>): Environment {
@@ -46,5 +54,9 @@ export function parseEnvironment(input: Record<string, string | undefined>): Env
     professionalRulesApproved: parsed.PROFESSIONAL_RULES_APPROVED,
     authSecurityPolicyApproved: parsed.AUTH_SECURITY_POLICY_APPROVED,
     privacyReviewApproved: parsed.PRIVACY_REVIEW_APPROVED,
+    dataRightsDrillComplete: parsed.DATA_RIGHTS_DRILL_COMPLETE,
+    backupRestoreDrillComplete: parsed.BACKUP_RESTORE_DRILL_COMPLETE,
+    operationsReadinessApproved: parsed.OPERATIONS_READINESS_APPROVED,
+    deploymentSecurityApproved: parsed.DEPLOYMENT_SECURITY_APPROVED,
   };
 }

@@ -12,6 +12,10 @@ const baseEnvironment: Environment = {
   professionalRulesApproved: false,
   authSecurityPolicyApproved: false,
   privacyReviewApproved: false,
+  dataRightsDrillComplete: false,
+  backupRestoreDrillComplete: false,
+  operationsReadinessApproved: false,
+  deploymentSecurityApproved: false,
 };
 
 describe('phase 1 HTTP API contract', () => {
@@ -40,9 +44,14 @@ describe('phase 1 HTTP API contract', () => {
       .expect({
         readyForRealUsers: false,
         blockers: [
+          'DEMO_MODE_ACTIVE',
           'PROFESSIONAL_RULES_UNAPPROVED',
           'AUTH_SECURITY_POLICY_UNAPPROVED',
           'PRIVACY_REVIEW_UNAPPROVED',
+          'DATA_RIGHTS_DRILL_INCOMPLETE',
+          'BACKUP_RESTORE_DRILL_INCOMPLETE',
+          'OPERATIONS_READINESS_INCOMPLETE',
+          'DEPLOYMENT_SECURITY_UNAPPROVED',
         ],
       });
   });
@@ -52,7 +61,33 @@ describe('phase 1 HTTP API contract', () => {
     const response = await request(app.getHttpServer()).get('/api/v1/readiness').expect(200);
     expect(response.body).toEqual({
       readyForRealUsers: false,
-      blockers: ['AUTH_SECURITY_POLICY_UNAPPROVED', 'PRIVACY_REVIEW_UNAPPROVED'],
+      blockers: [
+        'DEMO_MODE_ACTIVE',
+        'AUTH_SECURITY_POLICY_UNAPPROVED',
+        'PRIVACY_REVIEW_UNAPPROVED',
+        'DATA_RIGHTS_DRILL_INCOMPLETE',
+        'BACKUP_RESTORE_DRILL_INCOMPLETE',
+        'OPERATIONS_READINESS_INCOMPLETE',
+        'DEPLOYMENT_SECURITY_UNAPPROVED',
+      ],
+    });
+  });
+
+  it('is ready only when demo is off and all seven evidence gates are explicit', async () => {
+    app = await buildApplication({
+      ...baseEnvironment,
+      demoMode: false,
+      professionalRulesApproved: true,
+      authSecurityPolicyApproved: true,
+      privacyReviewApproved: true,
+      dataRightsDrillComplete: true,
+      backupRestoreDrillComplete: true,
+      operationsReadinessApproved: true,
+      deploymentSecurityApproved: true,
+    });
+    await request(app.getHttpServer()).get('/api/v1/readiness').expect(200).expect({
+      readyForRealUsers: true,
+      blockers: [],
     });
   });
 
