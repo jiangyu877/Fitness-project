@@ -23,6 +23,8 @@ import { Link, Navigate, useLocation } from 'react-router-dom';
 
 import { demoPersonas, prototypeDisclaimer, type DemoPersona } from '../mocks/personas.js';
 import { pageCatalog, type PageDefinition } from '../mocks/page-catalog.js';
+import { PlanDemoPage } from '../features/plan-demo/plan-demo-page.js';
+import { ReviewDetailPage } from '../features/review/review-detail-page.js';
 import { resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -128,7 +130,7 @@ function H5Shell({ page }: { page: PageDefinition }) {
   return (
     <div className="h5-viewport">
       <main className="h5-main">
-        {isToday ? <H5Today /> : <GenericPage page={page} />}
+        {isToday ? <H5Today /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
       </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         <MobileNavItem to="/h5/today" label="今日" icon={<Home />} active={isToday} />
@@ -189,6 +191,14 @@ function Metric({ label, value, note, risk = false }: { label: string; value: st
 }
 
 function WebShell({ page }: { page: PageDefinition }) {
+  const content = page.id === 'WEB-WQ-01'
+    ? <WebWorkQueue />
+    : page.id === 'WEB-REV-01'
+      ? <ReviewDetailPage kind="diet" />
+      : page.id === 'WEB-REV-02'
+        ? <ReviewDetailPage kind="training" />
+        : <GenericPage page={page} />;
+
   return (
     <div className="web-app">
       <aside className="web-sidebar">
@@ -202,7 +212,7 @@ function WebShell({ page }: { page: PageDefinition }) {
       </aside>
       <div className="web-content">
         <header className="web-topbar"><DemoNotice /><PersonaSwitcher compact /></header>
-        <main>{page.id === 'WEB-WQ-01' ? <WebWorkQueue /> : <GenericPage page={page} />}</main>
+        <main>{content}</main>
       </div>
       <div className="unsupported-width" role="alert">当前宽度不支持处理后台任务，请将窗口调整到至少 1024px。</div>
     </div>

@@ -55,4 +55,20 @@ describe('frozen routes', () => {
       view.unmount();
     }
   });
+
+  it('renders dedicated phase two plan and review experiences', () => {
+    const plan = renderAt('/h5/plans/pending');
+    expect(screen.getByRole('button', { name: '确认饮食部分' })).toBeInTheDocument();
+    plan.unmount();
+
+    const dietReview = renderAt('/web/reviews/diet');
+    expect(screen.getByRole('heading', { name: '饮食审核' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发布给真人用户' })).toBeDisabled();
+    dietReview.unmount();
+
+    const trainingReview = renderAt('/web/reviews/training');
+    expect(screen.getByRole('heading', { name: '训练审核' })).toBeInTheDocument();
+    expect(screen.getByText('当前职责：训练审核者')).toBeInTheDocument();
+    trainingReview.unmount();
+  });
 });
