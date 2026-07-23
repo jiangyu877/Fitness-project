@@ -64,4 +64,27 @@ describe('loadDemoContext', () => {
     expect(result.fixture.reviewStatus).toBe('DEMO_UNREVIEWED');
     expect(result.fixture.publishable).toBe(false);
   });
+
+  it('accepts all known readiness blockers and keeps multiple fallback gates', async () => {
+    const guardedReadiness = {
+      readyForRealUsers: false,
+      blockers: ['DEMO_MODE_ACTIVE', 'PROFESSIONAL_RULES_UNAPPROVED', 'AUTH_SECURITY_POLICY_UNAPPROVED'],
+    };
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(guardedReadiness))
+      .mockResolvedValueOnce(jsonResponse(fixture));
+
+    const result = await loadDemoContext('persona_fat_loss', fetcher);
+    expect(result.source).toBe('api');
+    expect(result.readiness.blockers).toEqual(guardedReadiness.blockers);
+
+    const fallback = await loadDemoContext('persona_fat_loss', vi.fn().mockRejectedValue(new Error('offline')));
+    expect(fallback.readiness.blockers.length).toBeGreaterThan(1);
+    expect(fallback.readiness.readyForRealUsers).toBe(false);
+
+    const unknownFetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ readyForRealUsers: false, blockers: ['UNKNOWN_GATE'] }))
+      .mockResolvedValueOnce(jsonResponse(fixture));
+    expect((await loadDemoContext('persona_fat_loss', unknownFetcher)).source).toBe('fallback');
+  });
 });

@@ -26,6 +26,7 @@ import { pageCatalog, type PageDefinition } from '../mocks/page-catalog.js';
 import { PlanDemoPage } from '../features/plan-demo/plan-demo-page.js';
 import { ReviewDetailPage } from '../features/review/review-detail-page.js';
 import { Phase3Page, type Phase3PageKind } from '../features/phase3/phase3-pages.js';
+import { AuthOnboardingPage, type AuthOnboardingKind } from '../features/auth-onboarding/auth-onboarding-pages.js';
 import { resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -131,7 +132,7 @@ function H5Shell({ page }: { page: PageDefinition }) {
   return (
     <div className="h5-viewport">
       <main className="h5-main">
-        {isToday ? <H5Today /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
+        {isToday ? <H5Today /> : authOnboardingKind(page) ? <AuthOnboardingPage kind={authOnboardingKind(page)!} /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
       </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         <MobileNavItem to="/h5/today" label="今日" icon={<Home />} active={isToday} />
@@ -141,6 +142,19 @@ function H5Shell({ page }: { page: PageDefinition }) {
       </nav>
     </div>
   );
+}
+
+function authOnboardingKind(page: PageDefinition): AuthOnboardingKind | undefined {
+  const map: Partial<Record<string, AuthOnboardingKind>> = {
+    'H5-AUTH-01': 'invited-login',
+    'H5-AUTH-02': 'change-password',
+    'H5-ONB-01': 'consent',
+    'H5-ONB-02': 'screening',
+    'H5-ONB-03': 'profile',
+    'H5-ONB-04': 'preparation',
+    'WEB-AUTH-01': 'staff-login',
+  };
+  return map[page.id];
 }
 
 function phase3Kind(page: PageDefinition): Phase3PageKind | undefined {
@@ -197,8 +211,11 @@ function Metric({ label, value, note, risk = false }: { label: string; value: st
 }
 
 function WebShell({ page }: { page: PageDefinition }) {
+  const authKind = authOnboardingKind(page);
   const kind = phase3Kind(page);
-  const content = kind
+  const content = authKind
+    ? <AuthOnboardingPage kind={authKind} />
+    : kind
     ? <Phase3Page kind={kind} />
     : page.id === 'WEB-WQ-01'
     ? <WebWorkQueue />

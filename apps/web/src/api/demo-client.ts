@@ -2,7 +2,15 @@ import { prototypeDisclaimer, type DemoPersona } from '../mocks/personas.js';
 
 export type FixtureId = DemoPersona['id'];
 export type GoalType = 'FAT_LOSS' | 'MUSCLE_GAIN';
-export type ReadinessBlocker = 'PROFESSIONAL_RULES_UNAPPROVED';
+export type ReadinessBlocker =
+  | 'DEMO_MODE_ACTIVE'
+  | 'PROFESSIONAL_RULES_UNAPPROVED'
+  | 'AUTH_SECURITY_POLICY_UNAPPROVED'
+  | 'PRIVACY_REVIEW_UNAPPROVED'
+  | 'DATA_RIGHTS_DRILL_INCOMPLETE'
+  | 'BACKUP_RESTORE_DRILL_INCOMPLETE'
+  | 'OPERATIONS_READINESS_INCOMPLETE'
+  | 'DEPLOYMENT_SECURITY_UNAPPROVED';
 
 export interface DemoFixtureResponse {
   fixtureId: FixtureId;
@@ -28,8 +36,19 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 
 const fallbackReadiness: ReadinessResponse = {
   readyForRealUsers: false,
-  blockers: ['PROFESSIONAL_RULES_UNAPPROVED'],
+  blockers: [
+    'DEMO_MODE_ACTIVE',
+    'PROFESSIONAL_RULES_UNAPPROVED',
+    'AUTH_SECURITY_POLICY_UNAPPROVED',
+    'PRIVACY_REVIEW_UNAPPROVED',
+    'DATA_RIGHTS_DRILL_INCOMPLETE',
+    'BACKUP_RESTORE_DRILL_INCOMPLETE',
+    'OPERATIONS_READINESS_INCOMPLETE',
+    'DEPLOYMENT_SECURITY_UNAPPROVED',
+  ],
 };
+
+const knownBlockers: readonly ReadinessBlocker[] = fallbackReadiness.blockers;
 
 function createFallbackFixture(fixtureId: FixtureId): DemoFixtureResponse {
   return {
@@ -47,7 +66,7 @@ function isReadinessResponse(value: unknown): value is ReadinessResponse {
   const candidate = value as Record<string, unknown>;
   return typeof candidate.readyForRealUsers === 'boolean'
     && Array.isArray(candidate.blockers)
-    && candidate.blockers.every((blocker) => blocker === 'PROFESSIONAL_RULES_UNAPPROVED');
+    && candidate.blockers.every((blocker) => knownBlockers.includes(blocker as ReadinessBlocker));
 }
 
 function isSafeDemoFixture(value: unknown, fixtureId: FixtureId): value is DemoFixtureResponse {
