@@ -50,9 +50,21 @@ describe('OpenAPI contract', () => {
     expect(invitation?.parameters).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'x-request-id', in: 'header', required: true }),
       expect.objectContaining({ name: 'idempotency-key', in: 'header', required: true }),
-      expect.objectContaining({ name: 'x-actor-role', in: 'header', required: true }),
     ]));
+    expect(invitation?.parameters).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'x-actor-id' }),
+      expect.objectContaining({ name: 'x-actor-role' }),
+    ]));
+    expect(invitation?.security).toEqual(expect.arrayContaining([expect.objectContaining({ bearer: [] })]));
     expect(document.paths['/api/v1/onboarding/screening-results']?.post?.requestBody).toBeDefined();
+    expect(JSON.stringify(document.paths['/api/v1/identity/sessions'])).not.toContain('mfaVerified');
+    expect(JSON.stringify(document.paths['/api/v1/identity/sessions'])).toContain('actingRole');
+    for (const errorCode of [
+      'IDEMPOTENCY_KEY_REUSED',
+      'LOGIN_REPLAY_REQUIRES_REAUTHENTICATION',
+      'MFA_VERIFIER_UNAVAILABLE',
+      'PROFESSIONAL_QUALIFICATION_REQUIRED',
+    ]) expect(serialized).toContain(errorCode);
     for (const blocker of [
       'DEMO_MODE_ACTIVE',
       'PROFESSIONAL_RULES_UNAPPROVED',

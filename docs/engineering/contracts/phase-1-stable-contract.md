@@ -1,6 +1,6 @@
 # Stable Engineering Contract
 
-Version: 0.3.0
+Version: 0.4.0
 Date: 2026-07-23
 Owner: R&D
 Status: Implemented testable engineering slices; not approved for real-user service
@@ -56,11 +56,17 @@ The migration-backed slice exposes:
 - versioned step drafts at `PUT /api/v1/onboarding/profile/steps/{step}`;
 - trusted conclusion-only screening writes at `POST /api/v1/onboarding/screening-results`.
 
-Every write requires `x-request-id`, `idempotency-key`, `x-actor-id`, and `x-actor-role`. Authenticated writes additionally require a bearer session. Passwords use policy-configured scrypt, session tokens are random and stored only as SHA-256 digests, successful login clears failure count, and reaching the configured failure threshold locks the account and revokes sessions. The threshold, TTL, MFA requirement, and password parameters are injected approved-policy inputs, not hard-coded product decisions.
+Every write requires `x-request-id` for correlation and `idempotency-key`; actor headers are not accepted as authority. Authenticated writes derive the account and role from the bearer session. Audit IDs are server-generated and distinct from request IDs. Failed login audits use a null actor ID with controlled `SYSTEM` role and identify only an account matched by the submitted login identifier.
 
-Screening accepts only `PASS`, `HUMAN_REVIEW`, or `EXCLUDED`, from `PROFESSIONAL_RULE` or `MANUAL_REVIEW`, and only nutrition/training reviewers may record it. It contains no questions, client thresholds, or diagnosis.
+`POST /api/v1/identity/invitations` requires a valid STAFF bearer session. Staff login requires an explicit `actingRole`; the server verifies that role against `iam.account_role` and binds it to immutable `iam.session.active_role`. Every later authorization and audit decision uses that session role rather than guessing from all roles held by the natural person. An `OPERATIONS` session can create only `USER` accounts without staff roles. A `SYSTEM_ADMIN` session can create only `STAFF` accounts and assign the five database-constrained staff roles. The same multi-role account may create separate sessions for each verified acting role, but cannot switch role within a session. Initial administrators are supplied by an external deployment/identity seed; there is no anonymous bootstrap route and invitation never records professional qualification.
 
-The invitation route currently trusts explicit actor metadata as local/test bootstrap scaffolding. Production use remains blocked until a governed initial-admin mechanism, approved MFA verification, password reset/recovery, secret management, privacy/data-rights operations, and approval evidence wiring exist.
+Passwords use policy-configured scrypt. Initial password change is allowed only for an `INVITED` account whose initial-change flag remains true; locked or disabled accounts cannot be reactivated through that route. Session tokens are random, returned only in the first successful login response, and stored only as SHA-256 digests. The login idempotency result contains a non-secret projection; exact replay returns `LOGIN_REPLAY_REQUIRES_REAUTHENTICATION` and requires a new key rather than replaying the token.
+
+Staff MFA is determined only by an injected server-side `MfaVerifier` and verified challenge. The login request has no `mfaVerified` field. When policy requires staff MFA and no verifier is configured, login fails closed. Staff initial password change also requires an explicit `actingRole` and validates it against the account's persisted roles before audit. The threshold, TTL, MFA requirement, and password parameters are injected approved-policy inputs, not hard-coded product decisions.
+
+Identity/onboarding idempotency is scoped by operation, server-derived principal/role, and request fingerprint. Reusing a key across routes, principals, or bodies returns HTTP 409 with `IDEMPOTENCY_KEY_REUSED`; concurrent exact requests create one side effect. Failed login attempts deliberately bypass idempotency so every HTTP attempt increments the configured counter. Reaching the threshold locks the account and revokes active sessions.
+
+Screening accepts only `PASS`, `HUMAN_REVIEW`, or `EXCLUDED`, from `PROFESSIONAL_RULE` or `MANUAL_REVIEW`. The server principal must hold `NUTRITION_REVIEWER` or `TRAINING_REVIEWER` and the corresponding `iam.account_role.qualified_at` must be non-null. Qualification is external seed/evidence data; this slice exposes no qualification approval API. Rejection creates no screening row. Screening contains no questions, client thresholds, or diagnosis.
 
 ### `GET /api/v1/demo/personas/{fixtureId}`
 
@@ -128,7 +134,7 @@ Phase 3 adds `packages/database/src/plan-repository.ts` as a tested PGlite/Postg
 
 ## OpenAPI
 
-The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes stable identity/onboarding paths, required write headers, request shapes, all eight readiness blockers, fixture, goal, review, plan status, transition, current/gap, and conflict enums. It contains no secret examples or professional placeholder values.
+The machine-readable contract is served at `GET /openapi.json`; Swagger UI is at `GET /docs`. The document includes bearer security for authenticated identity/onboarding paths, only the correlation/idempotency write headers, request shapes without client-asserted MFA, stable security errors, all eight readiness blockers, fixture, goal, review, plan status, transition, current/gap, and conflict enums. It contains no secret examples or professional placeholder values.
 
 ## Domain And Database Guarantees
 
@@ -159,7 +165,7 @@ These guarantees are currently covered by domain and migration tests. The full p
 The following remain outside this implementation and continue to block real-user testing or production deployment as applicable:
 
 - professional sign-off for screening, risk, nutrition, training, and weekly-adjustment rules;
-- production approval evidence for authentication parameters, initial administrator bootstrap, MFA verification, and password recovery;
+- production approval evidence for authentication parameters, external initial-administrator seed, MFA verifier integration, and password recovery;
 - data export/deletion operations and completed data-rights drill evidence;
 - deployment region, budget, secret management, backup target, and monitoring integration;
 - CI repository policy and protected release workflow;

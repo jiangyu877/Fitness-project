@@ -1,15 +1,56 @@
-import { Inject, Injectable, ServiceUnavailableException, ConflictException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
-import { generateSessionCredential, hashPassword, verifyPassword, type AuthSecurityPolicy } from '@lianban/domain';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { PGlite } from '@electric-sql/pglite';
+import {
+  generateSessionCredential,
+  hashPassword,
+  verifyPassword,
+  type AuthSecurityPolicy,
+} from '@lianban/domain';
 import { createHash, randomUUID } from 'node:crypto';
+
 import type { Environment } from '../config/environment.js';
-import { ENVIRONMENT } from '../readiness/readiness.controller.js';
 import { DatabaseService } from '../database/database.service.js';
+import { ENVIRONMENT } from '../readiness/readiness.controller.js';
+import { MFA_VERIFIER, type MfaVerifier } from './mfa-verifier.js';
 
 export const AUTH_POLICY = Symbol('AUTH_POLICY');
-type ActorRole = 'OPERATIONS'|'NUTRITION_REVIEWER'|'TRAINING_REVIEWER'|'SYSTEM_ADMIN'|'AUDIT_VIEWER'|'USER';
-type WriteMeta = { requestId: string; idempotencyKey: string; actorId: string; actorRole: ActorRole };
+
+type StaffRole =
+  | 'OPERATIONS'
+  | 'NUTRITION_REVIEWER'
+  | 'TRAINING_REVIEWER'
+  | 'SYSTEM_ADMIN'
+  | 'AUDIT_VIEWER';
+type ActorRole = StaffRole | 'USER' | 'SYSTEM';
+type RequestMeta = { requestId: string; idempotencyKey: string };
 type Sql = Pick<PGlite, 'query'>;
+type RoleGrant = { code: StaffRole; qualifiedAt: Date | null };
+type Principal = {
+  accountId: string;
+  accountType: 'USER' | 'STAFF';
+  roles: RoleGrant[];
+  activeRole: ActorRole | null;
+};
+type AccountRow = {
+  id: string;
+  password_hash: string;
+  account_type: 'USER' | 'STAFF';
+  status: 'INVITED' | 'ACTIVE' | 'LOCKED' | 'DISABLED';
+  initial_password_change_required: boolean;
+};
+type IdempotencyRow = {
+  operation: string;
+  principal_scope: string;
+  request_fingerprint: string;
+  result: unknown;
+};
 
 @Injectable()
 export class IdentityOnboardingService {
@@ -17,76 +58,704 @@ export class IdentityOnboardingService {
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
     @Inject(AUTH_POLICY) private readonly policy: AuthSecurityPolicy | null,
+    @Inject(MFA_VERIFIER) private readonly mfaVerifier: MfaVerifier | null,
   ) {}
 
-  async invite(input: { accountId:string; loginIdentifier:string; accountType:'USER'|'STAFF'; roles:string[]; initialPassword:string }, meta: WriteMeta) {
+  async invite(
+    token: string,
+    input: {
+      accountId: string;
+      loginIdentifier: string;
+      accountType: 'USER' | 'STAFF';
+      roles: StaffRole[];
+      initialPassword: string;
+    },
+    meta: RequestMeta,
+  ) {
     this.requirePolicy();
+    const principal = await this.requireSession(token, 'STAFF');
+    const actorRole = this.invitationRole(principal, input);
     const passwordHash = await hashPassword(input.initialPassword, this.policy!);
-    return this.write(meta, 'ACCOUNT_INVITED', 'ACCOUNT', input.accountId, async (tx) => {
-      await tx.query(`INSERT INTO iam.account (id,login_identifier,password_hash,account_type) VALUES ($1,$2,$3,$4)`, [input.accountId,input.loginIdentifier,passwordHash,input.accountType]);
-      for (const role of input.roles) await tx.query(`INSERT INTO iam.account_role (account_id,role_code) VALUES ($1,$2)`, [input.accountId,role]);
-      return { businessStatus:'ACCOUNT_INVITED', requestId:meta.requestId, accountId:input.accountId, version:1 };
+    return this.write({
+      meta,
+      operation: 'IDENTITY_INVITE',
+      principal,
+      actorRole,
+      fingerprintPayload: input,
+      action: 'ACCOUNT_INVITED',
+      subjectType: 'ACCOUNT',
+      subjectId: input.accountId,
+      execute: async (tx) => {
+        await tx.query(
+          `INSERT INTO iam.account (id, login_identifier, password_hash, account_type)
+           VALUES ($1, $2, $3, $4)`,
+          [input.accountId, input.loginIdentifier, passwordHash, input.accountType],
+        );
+        for (const role of input.roles) {
+          await tx.query(
+            `INSERT INTO iam.account_role (account_id, role_code) VALUES ($1, $2)`,
+            [input.accountId, role],
+          );
+        }
+        return {
+          businessStatus: 'ACCOUNT_INVITED',
+          requestId: meta.requestId,
+          accountId: input.accountId,
+          version: 1,
+        };
+      },
     });
   }
 
-  async changePassword(input:{accountId:string;currentPassword:string;newPassword:string;expectedVersion:number}, meta:WriteMeta) {
+  async changePassword(
+    input: {
+      accountId: string;
+      currentPassword: string;
+      newPassword: string;
+      expectedVersion: number;
+      actingRole?: StaffRole | undefined;
+    },
+    meta: RequestMeta,
+  ) {
     this.requirePolicy();
     const account = await this.accountById(input.accountId);
-    if (!account || !await verifyPassword(input.currentPassword, account.password_hash)) throw new UnauthorizedException(this.error(meta,'INVALID_CREDENTIALS'));
-    const passwordHash = await hashPassword(input.newPassword,this.policy!);
-    return this.write(meta,'PASSWORD_CHANGED','ACCOUNT',input.accountId,async tx => {
-      const result = await tx.query(`UPDATE iam.account SET password_hash=$1,initial_password_change_required=false,status='ACTIVE',password_changed_at=now(),version=version+1 WHERE id=$2 AND version=$3 RETURNING version`,[passwordHash,input.accountId,input.expectedVersion]);
-      if (!result.rows[0]) throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));
-      return {businessStatus:'PASSWORD_CHANGED',requestId:meta.requestId,version:(result.rows[0] as {version:number}).version};
+    if (!account || !await verifyPassword(input.currentPassword, account.password_hash)) {
+      throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
+    }
+    if (account.status !== 'INVITED' || !account.initial_password_change_required) {
+      throw new ConflictException(this.error(meta, 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED'));
+    }
+    const principal = await this.principalForAccount(account);
+    const actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    const passwordHash = await hashPassword(input.newPassword, this.policy!);
+    return this.write({
+      meta,
+      operation: 'IDENTITY_INITIAL_PASSWORD_CHANGE',
+      principal,
+      actorRole,
+      fingerprintPayload: input,
+      action: 'PASSWORD_CHANGED',
+      subjectType: 'ACCOUNT',
+      subjectId: account.id,
+      execute: async (tx) => {
+        const result = await tx.query<{ version: number }>(
+          `UPDATE iam.account
+           SET password_hash=$1, initial_password_change_required=false,
+               status='ACTIVE', password_changed_at=now(), version=version+1
+           WHERE id=$2 AND version=$3 AND status='INVITED'
+             AND initial_password_change_required=true
+           RETURNING version`,
+          [passwordHash, account.id, input.expectedVersion],
+        );
+        if (!result.rows[0]) {
+          throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+        }
+        return {
+          businessStatus: 'PASSWORD_CHANGED',
+          requestId: meta.requestId,
+          version: result.rows[0].version,
+        };
+      },
     });
   }
 
-  async login(input:{loginIdentifier:string;password:string;sessionKind:'USER'|'STAFF';mfaVerified:boolean},meta:WriteMeta){
+  async login(
+    input: {
+      loginIdentifier: string;
+      password: string;
+      sessionKind: 'USER' | 'STAFF';
+      mfaChallengeId?: string | undefined;
+      actingRole?: StaffRole | undefined;
+    },
+    meta: RequestMeta,
+  ) {
     this.requirePolicy();
-    const result=await this.db.database.query<any>(`SELECT * FROM iam.account WHERE login_identifier=$1`,[input.loginIdentifier]); const account=result.rows[0];
-    if(!account||account.status!=='ACTIVE'||account.initial_password_change_required) throw new UnauthorizedException(this.error(meta,'INVALID_CREDENTIALS'));
+    const account = await this.accountByLogin(input.loginIdentifier);
+    if (!account || account.status !== 'ACTIVE' || account.initial_password_change_required) {
+      throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
+    }
     if (!await verifyPassword(input.password, account.password_hash)) {
       await this.recordFailedLogin(account.id, meta);
-      throw new UnauthorizedException(this.error(meta,'INVALID_CREDENTIALS'));
+      throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
     }
-    const expectedKind=account.account_type==='USER'?'USER':'STAFF'; if(input.sessionKind!==expectedKind) throw new ForbiddenException(this.error(meta,'SESSION_KIND_MISMATCH'));
-    if(input.sessionKind==='STAFF'&&this.policy!.mfaRequiredForStaff&&!input.mfaVerified) throw new ForbiddenException(this.error(meta,'MFA_REQUIRED'));
-    const credential=generateSessionCredential(); const expiresAt=new Date(Date.now()+this.policy!.sessionTtlSeconds*1000);
-    return this.write(meta,'SESSION_CREATED','ACCOUNT',account.id,async tx=>{await tx.query(`UPDATE iam.account SET failed_attempts=0 WHERE id=$1`,[account.id]);await tx.query(`INSERT INTO iam.session (id,account_id,session_kind,token_hash,mfa_verified,expires_at) VALUES ($1,$2,$3,$4,$5,$6)`,[randomUUID(),account.id,input.sessionKind,credential.tokenHash,input.mfaVerified,expiresAt]);return {businessStatus:'SESSION_CREATED',requestId:meta.requestId,sessionToken:credential.token,expiresAt:expiresAt.toISOString()};});
+    const expectedKind = account.account_type === 'USER' ? 'USER' : 'STAFF';
+    if (input.sessionKind !== expectedKind) {
+      throw new ForbiddenException(this.error(meta, 'SESSION_KIND_MISMATCH'));
+    }
+
+    const principal = await this.principalForAccount(account);
+    const actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    principal.activeRole = actorRole;
+    const mfaVerified = await this.verifyMfa(principal, input.mfaChallengeId);
+    return this.createSession(principal, actorRole, input, mfaVerified, meta);
   }
 
-  async acceptConsent(token:string, consentVersion:string, meta:WriteMeta){const session=await this.session(token,'USER');this.assertActor(session,meta,['USER']);const consentId=randomUUID();return this.write(meta,'CONSENT_ACCEPTED','CONSENT',consentId,async tx=>{await tx.query(`INSERT INTO care.consent_record (id,user_id,consent_version,accepted_at) VALUES ($1,$2,$3,now())`,[consentId,session.accountId,consentVersion]);return {businessStatus:'CONSENT_ACCEPTED',requestId:meta.requestId,consentId,consentVersion,version:1};});}
-
-  async withdrawConsent(token:string,consentId:string,expectedVersion:number,meta:WriteMeta){const session=await this.session(token,'USER');this.assertActor(session,meta,['USER']);return this.write(meta,'CONSENT_WITHDRAWN','CONSENT',consentId,async tx=>{const result=await tx.query<any>(`UPDATE care.consent_record SET withdrawn_at=now(),record_version=record_version+1 WHERE id=$1 AND user_id=$2 AND record_version=$3 AND withdrawn_at IS NULL RETURNING record_version`,[consentId,session.accountId,expectedVersion]);if(!result.rows[0])throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));return{businessStatus:'CONSENT_WITHDRAWN',requestId:meta.requestId,consentId,version:result.rows[0].record_version};});}
-
-  async setAccountStatus(token:string,accountId:string,status:'LOCKED'|'DISABLED',expectedVersion:number,meta:WriteMeta){const session=await this.session(token,'STAFF');this.assertActor(session,meta,['SYSTEM_ADMIN']);return this.write(meta,'ACCOUNT_STATUS_CHANGED','ACCOUNT',accountId,async tx=>{const result=await tx.query<any>(`UPDATE iam.account SET status=$1,locked_at=CASE WHEN $1='LOCKED' THEN now() ELSE locked_at END,disabled_at=CASE WHEN $1='DISABLED' THEN now() ELSE disabled_at END,version=version+1 WHERE id=$2 AND version=$3 RETURNING version`,[status,accountId,expectedVersion]);if(!result.rows[0])throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));await tx.query(`UPDATE iam.session SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL`,[accountId]);return{businessStatus:'ACCOUNT_STATUS_CHANGED',requestId:meta.requestId,status,version:result.rows[0].version};});}
-
-  async saveProfile(token:string,step:string,expectedVersion:number,data:Record<string,unknown>,meta:WriteMeta){const session=await this.session(token,'USER');this.assertActor(session,meta,['USER']);return this.write(meta,'PROFILE_DRAFT_SAVED','PROFILE',session.accountId,async tx=>{const existing=await tx.query<any>(`SELECT id,version,profile_data,completed_steps FROM care.user_profile WHERE user_id=$1`,[session.accountId]);if(!existing.rows[0]){if(expectedVersion!==0)throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));await tx.query(`INSERT INTO care.user_profile (id,user_id,profile_data,completed_steps,version) VALUES ($1,$2,$3::jsonb,$4::jsonb,1)`,[randomUUID(),session.accountId,JSON.stringify({[step]:data}),JSON.stringify([step])]);return {businessStatus:'PROFILE_DRAFT_SAVED',requestId:meta.requestId,version:1};}const row=existing.rows[0];if(row.version!==expectedVersion)throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));const profile={...(row.profile_data as object),[step]:data};const steps=Array.from(new Set([...(row.completed_steps as string[]),step]));const saved=await tx.query<any>(`UPDATE care.user_profile SET profile_data=$1::jsonb,completed_steps=$2::jsonb,version=version+1,updated_at=now() WHERE user_id=$3 AND version=$4 RETURNING version`,[JSON.stringify(profile),JSON.stringify(steps),session.accountId,expectedVersion]);if(!saved.rows[0])throw new ConflictException(this.error(meta,'VERSION_CONFLICT',['REFRESH']));return {businessStatus:'PROFILE_DRAFT_SAVED',requestId:meta.requestId,version:saved.rows[0].version};});}
-
-  async recordScreening(token:string,input:{userId:string;conclusion:'PASS'|'HUMAN_REVIEW'|'EXCLUDED';source:'PROFESSIONAL_RULE'|'MANUAL_REVIEW';ruleVersion:string|null},meta:WriteMeta){const session=await this.session(token,'STAFF');this.assertActor(session,meta,['NUTRITION_REVIEWER','TRAINING_REVIEWER']);return this.write(meta,'SCREENING_RECORDED','SCREENING',input.userId,async tx=>{await tx.query(`INSERT INTO care.screening_result (id,user_id,conclusion,source,rule_version,recorded_by,actor_role) VALUES ($1,$2,$3,$4,$5,$6,$7)`,[randomUUID(),input.userId,input.conclusion,input.source,input.ruleVersion,session.accountId,meta.actorRole]);return {businessStatus:'SCREENING_RECORDED',requestId:meta.requestId,conclusion:input.conclusion};});}
-
-  private requirePolicy(){if(!this.environment.authSecurityPolicyApproved||!this.policy?.approved)throw new ServiceUnavailableException({businessStatus:'IDENTITY_BLOCKED',errorCode:'AUTH_SECURITY_POLICY_UNAPPROVED',recoverableActions:['WAIT_FOR_SECURITY_APPROVAL']});}
-  private async accountById(id:string){return (await this.db.database.query<any>(`SELECT * FROM iam.account WHERE id=$1`,[id])).rows[0];}
-  private async session(token:string,kind:'USER'|'STAFF'){const hash=createHash('sha256').update(token).digest('hex');const result=await this.db.database.query<any>(`SELECT s.account_id AS "accountId",s.session_kind,a.status,array_remove(array_agg(ar.role_code),NULL) roles FROM iam.session s JOIN iam.account a ON a.id=s.account_id LEFT JOIN iam.account_role ar ON ar.account_id=a.id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() GROUP BY s.account_id,s.session_kind,a.status`,[hash]);const row=result.rows[0];if(!row||row.status!=='ACTIVE'||row.session_kind!==kind)throw new UnauthorizedException({businessStatus:'SESSION_INVALID',errorCode:'SESSION_INVALID',recoverableActions:['LOGIN']});return row as {accountId:string;roles:string[]};}
-  private error(meta:WriteMeta,errorCode:string,recoverableActions:string[]=[]){return{businessStatus:'WRITE_REJECTED',errorCode,recoverableActions,requestId:meta.requestId};}
-  private assertActor(session:{accountId:string;roles:string[]},meta:WriteMeta,allowed:ActorRole[]){
-    const roleMatches=meta.actorRole==='USER'||session.roles.includes(meta.actorRole);
-    if(session.accountId!==meta.actorId||!allowed.includes(meta.actorRole)||!roleMatches)throw new ForbiddenException(this.error(meta,'ROLE_NOT_AUTHORIZED'));
-  }
-  private async recordFailedLogin(accountId:string,meta:WriteMeta){
-    await this.db.database.transaction(async tx=>{
-      const existing=await tx.query<any>(`SELECT result FROM audit.idempotency_key WHERE key=$1`,[meta.idempotencyKey]);
-      if(existing.rows[0])return;
-      const updated=await tx.query<any>(`UPDATE iam.account SET failed_attempts=failed_attempts+1 WHERE id=$1 AND status='ACTIVE' RETURNING failed_attempts`,[accountId]);
-      const locked=(updated.rows[0]?.failed_attempts??0)>=this.policy!.maxFailedAttempts;
-      if(locked){
-        await tx.query(`UPDATE iam.account SET status='LOCKED',locked_at=now(),version=version+1 WHERE id=$1`,[accountId]);
-        await tx.query(`UPDATE iam.session SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL`,[accountId]);
-      }
-      const output={businessStatus:locked?'ACCOUNT_LOCKED':'LOGIN_FAILED',requestId:meta.requestId};
-      await tx.query(`INSERT INTO audit.idempotency_key (key,result_id,result) VALUES ($1,$2,$3::jsonb)`,[meta.idempotencyKey,meta.requestId,JSON.stringify(output)]);
-      await tx.query(`INSERT INTO audit.audit_event (id,actor_id,actor_role,action,subject_type,subject_id,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,[meta.requestId,meta.actorId,meta.actorRole,locked?'ACCOUNT_LOCKED':'LOGIN_FAILED','ACCOUNT',accountId,meta.requestId]);
+  async acceptConsent(token: string, consentVersion: string, meta: RequestMeta) {
+    const principal = await this.requireSession(token, 'USER');
+    const consentId = randomUUID();
+    return this.write({
+      meta,
+      operation: 'ONBOARDING_CONSENT_ACCEPT',
+      principal,
+      actorRole: 'USER',
+      fingerprintPayload: { consentVersion },
+      action: 'CONSENT_ACCEPTED',
+      subjectType: 'CONSENT',
+      subjectId: consentId,
+      execute: async (tx) => {
+        await tx.query(
+          `INSERT INTO care.consent_record (id, user_id, consent_version, accepted_at)
+           VALUES ($1, $2, $3, now())`,
+          [consentId, principal.accountId, consentVersion],
+        );
+        return {
+          businessStatus: 'CONSENT_ACCEPTED',
+          requestId: meta.requestId,
+          consentId,
+          consentVersion,
+          version: 1,
+        };
+      },
     });
   }
-  private async write<T extends Record<string,unknown>>(meta:WriteMeta,action:string,subjectType:string,subjectId:string,operation:(tx:Sql)=>Promise<T>):Promise<T>{return this.db.database.transaction(async tx=>{const existing=await tx.query<any>(`SELECT result FROM audit.idempotency_key WHERE key=$1`,[meta.idempotencyKey]);if(existing.rows[0])return existing.rows[0].result as T;const output=await operation(tx);await tx.query(`INSERT INTO audit.idempotency_key (key,result_id,result) VALUES ($1,$2,$3::jsonb)`,[meta.idempotencyKey,meta.requestId,JSON.stringify(output)]);await tx.query(`INSERT INTO audit.audit_event (id,actor_id,actor_role,action,subject_type,subject_id,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,[meta.requestId,meta.actorId,meta.actorRole,action,subjectType,subjectId,meta.requestId]);return output;});}
+
+  async withdrawConsent(token: string, consentId: string, expectedVersion: number, meta: RequestMeta) {
+    const principal = await this.requireSession(token, 'USER');
+    return this.write({
+      meta,
+      operation: 'ONBOARDING_CONSENT_WITHDRAW',
+      principal,
+      actorRole: 'USER',
+      fingerprintPayload: { consentId, expectedVersion },
+      action: 'CONSENT_WITHDRAWN',
+      subjectType: 'CONSENT',
+      subjectId: consentId,
+      execute: async (tx) => {
+        const result = await tx.query<{ record_version: number }>(
+          `UPDATE care.consent_record
+           SET withdrawn_at=now(), record_version=record_version+1
+           WHERE id=$1 AND user_id=$2 AND record_version=$3 AND withdrawn_at IS NULL
+           RETURNING record_version`,
+          [consentId, principal.accountId, expectedVersion],
+        );
+        if (!result.rows[0]) {
+          throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+        }
+        return {
+          businessStatus: 'CONSENT_WITHDRAWN',
+          requestId: meta.requestId,
+          consentId,
+          version: result.rows[0].record_version,
+        };
+      },
+    });
+  }
+
+  async setAccountStatus(
+    token: string,
+    accountId: string,
+    status: 'LOCKED' | 'DISABLED',
+    expectedVersion: number,
+    meta: RequestMeta,
+  ) {
+    const principal = await this.requireSession(token, 'STAFF');
+    this.requireRole(principal, 'SYSTEM_ADMIN');
+    return this.write({
+      meta,
+      operation: 'IDENTITY_ACCOUNT_STATUS',
+      principal,
+      actorRole: 'SYSTEM_ADMIN',
+      fingerprintPayload: { accountId, status, expectedVersion },
+      action: 'ACCOUNT_STATUS_CHANGED',
+      subjectType: 'ACCOUNT',
+      subjectId: accountId,
+      execute: async (tx) => {
+        const result = await tx.query<{ version: number }>(
+          `UPDATE iam.account
+           SET status=$1,
+               locked_at=CASE WHEN $1='LOCKED' THEN now() ELSE locked_at END,
+               disabled_at=CASE WHEN $1='DISABLED' THEN now() ELSE disabled_at END,
+               version=version+1
+           WHERE id=$2 AND version=$3
+           RETURNING version`,
+          [status, accountId, expectedVersion],
+        );
+        if (!result.rows[0]) {
+          throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+        }
+        await tx.query(
+          `UPDATE iam.session SET revoked_at=now()
+           WHERE account_id=$1 AND revoked_at IS NULL`,
+          [accountId],
+        );
+        return {
+          businessStatus: 'ACCOUNT_STATUS_CHANGED',
+          requestId: meta.requestId,
+          status,
+          version: result.rows[0].version,
+        };
+      },
+    });
+  }
+
+  async saveProfile(
+    token: string,
+    step: string,
+    expectedVersion: number,
+    data: Record<string, unknown>,
+    meta: RequestMeta,
+  ) {
+    const principal = await this.requireSession(token, 'USER');
+    return this.write({
+      meta,
+      operation: 'ONBOARDING_PROFILE_STEP_SAVE',
+      principal,
+      actorRole: 'USER',
+      fingerprintPayload: { step, expectedVersion, data },
+      action: 'PROFILE_DRAFT_SAVED',
+      subjectType: 'PROFILE',
+      subjectId: principal.accountId,
+      execute: async (tx) => this.saveProfileStep(tx, principal.accountId, step, expectedVersion, data, meta),
+    });
+  }
+
+  async recordScreening(
+    token: string,
+    input: {
+      userId: string;
+      conclusion: 'PASS' | 'HUMAN_REVIEW' | 'EXCLUDED';
+      source: 'PROFESSIONAL_RULE' | 'MANUAL_REVIEW';
+      ruleVersion: string | null;
+    },
+    meta: RequestMeta,
+  ) {
+    const principal = await this.requireSession(token, 'STAFF');
+    const actorRole = this.qualifiedReviewerRole(principal);
+    return this.write({
+      meta,
+      operation: 'ONBOARDING_SCREENING_RECORD',
+      principal,
+      actorRole,
+      fingerprintPayload: input,
+      action: 'SCREENING_RECORDED',
+      subjectType: 'SCREENING',
+      subjectId: input.userId,
+      execute: async (tx) => {
+        await tx.query(
+          `INSERT INTO care.screening_result
+             (id, user_id, conclusion, source, rule_version, recorded_by, actor_role)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [randomUUID(), input.userId, input.conclusion, input.source, input.ruleVersion, principal.accountId, actorRole],
+        );
+        return {
+          businessStatus: 'SCREENING_RECORDED',
+          requestId: meta.requestId,
+          conclusion: input.conclusion,
+        };
+      },
+    });
+  }
+
+  private async createSession(
+    principal: Principal,
+    actorRole: ActorRole,
+    input: { loginIdentifier: string; password: string; sessionKind: 'USER' | 'STAFF'; mfaChallengeId?: string | undefined; actingRole?: StaffRole | undefined },
+    mfaVerified: boolean,
+    meta: RequestMeta,
+  ) {
+    const operation = 'IDENTITY_SESSION_CREATE';
+    const principalScope = this.principalScope(principal, actorRole);
+    const fingerprint = this.fingerprint(input);
+    const credential = generateSessionCredential();
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + this.policy!.sessionTtlSeconds * 1000);
+
+    const created = await this.db.database.transaction(async (tx) => {
+      const claim = await this.claimIdempotency(tx, meta, operation, principalScope, fingerprint);
+      if (!claim) {
+        throw new ConflictException(this.error(
+          meta,
+          'LOGIN_REPLAY_REQUIRES_REAUTHENTICATION',
+          ['LOGIN_WITH_NEW_IDEMPOTENCY_KEY'],
+        ));
+      }
+      await tx.query(`UPDATE iam.account SET failed_attempts=0 WHERE id=$1`, [principal.accountId]);
+      await tx.query(
+        `INSERT INTO iam.session
+           (id, account_id, session_kind, token_hash, mfa_verified, expires_at, active_role)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [sessionId, principal.accountId, input.sessionKind, credential.tokenHash, mfaVerified, expiresAt, actorRole],
+      );
+      const projection = {
+        businessStatus: 'SESSION_CREATED',
+        requestId: meta.requestId,
+        sessionId,
+        expiresAt: expiresAt.toISOString(),
+      };
+      await this.completeIdempotency(tx, meta.idempotencyKey, projection);
+      await this.appendAudit(tx, {
+        actorId: principal.accountId,
+        actorRole,
+        action: 'SESSION_CREATED',
+        subjectType: 'ACCOUNT',
+        subjectId: principal.accountId,
+        requestId: meta.requestId,
+      });
+      return projection;
+    });
+    return { ...created, sessionToken: credential.token };
+  }
+
+  private async write<T extends Record<string, unknown>>(input: {
+    meta: RequestMeta;
+    operation: string;
+    principal: Principal;
+    actorRole: ActorRole;
+    fingerprintPayload: unknown;
+    action: string;
+    subjectType: string;
+    subjectId: string;
+    execute: (tx: Sql) => Promise<T>;
+  }): Promise<T> {
+    const principalScope = this.principalScope(input.principal, input.actorRole);
+    const fingerprint = this.fingerprint(input.fingerprintPayload);
+    return this.db.database.transaction(async (tx) => {
+      const claim = await this.claimIdempotency(
+        tx,
+        input.meta,
+        input.operation,
+        principalScope,
+        fingerprint,
+      );
+      if (!claim) {
+        const existing = await this.readIdempotency(tx, input.meta.idempotencyKey);
+        this.assertIdempotencyScope(existing, input.operation, principalScope, fingerprint, input.meta);
+        return this.parseJson(existing.result) as T;
+      }
+      const output = await input.execute(tx);
+      await this.completeIdempotency(tx, input.meta.idempotencyKey, output);
+      await this.appendAudit(tx, {
+        actorId: input.principal.accountId,
+        actorRole: input.actorRole,
+        action: input.action,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        requestId: input.meta.requestId,
+      });
+      return output;
+    });
+  }
+
+  private async claimIdempotency(
+    tx: Sql,
+    meta: RequestMeta,
+    operation: string,
+    principalScope: string,
+    fingerprint: string,
+  ): Promise<boolean> {
+    const inserted = await tx.query(
+      `INSERT INTO audit.idempotency_key
+         (key, result_id, result, operation, principal_scope, request_fingerprint)
+       VALUES ($1, $2, '{}'::jsonb, $3, $4, $5)
+       ON CONFLICT (key) DO NOTHING
+       RETURNING key`,
+      [meta.idempotencyKey, randomUUID(), operation, principalScope, fingerprint],
+    );
+    if (inserted.rows[0]) return true;
+    const existing = await this.readIdempotency(tx, meta.idempotencyKey);
+    this.assertIdempotencyScope(existing, operation, principalScope, fingerprint, meta);
+    return false;
+  }
+
+  private async readIdempotency(tx: Sql, key: string): Promise<IdempotencyRow> {
+    const result = await tx.query<IdempotencyRow>(
+      `SELECT operation, principal_scope, request_fingerprint, result
+       FROM audit.idempotency_key WHERE key=$1`,
+      [key],
+    );
+    if (!result.rows[0]) throw new Error('IDEMPOTENCY_RECORD_NOT_FOUND');
+    return result.rows[0];
+  }
+
+  private assertIdempotencyScope(
+    existing: IdempotencyRow,
+    operation: string,
+    principalScope: string,
+    fingerprint: string,
+    meta: RequestMeta,
+  ) {
+    if (
+      existing.operation !== operation
+      || existing.principal_scope !== principalScope
+      || existing.request_fingerprint !== fingerprint
+    ) {
+      throw new ConflictException(this.error(meta, 'IDEMPOTENCY_KEY_REUSED', ['USE_NEW_IDEMPOTENCY_KEY']));
+    }
+  }
+
+  private async completeIdempotency(tx: Sql, key: string, output: unknown) {
+    await tx.query(
+      `UPDATE audit.idempotency_key SET result=$1::jsonb WHERE key=$2`,
+      [JSON.stringify(output), key],
+    );
+  }
+
+  private async appendAudit(tx: Sql, input: {
+    actorId: string | null;
+    actorRole: ActorRole;
+    action: string;
+    subjectType: string;
+    subjectId: string;
+    requestId: string;
+  }) {
+    await tx.query(
+      `INSERT INTO audit.audit_event
+         (id, actor_id, actor_role, action, subject_type, subject_id, request_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [randomUUID(), input.actorId, input.actorRole, input.action, input.subjectType, input.subjectId, input.requestId],
+    );
+  }
+
+  private async recordFailedLogin(accountId: string, meta: RequestMeta) {
+    await this.db.database.transaction(async (tx) => {
+      const updated = await tx.query<{ failed_attempts: number }>(
+        `UPDATE iam.account SET failed_attempts=failed_attempts+1
+         WHERE id=$1 AND status='ACTIVE' RETURNING failed_attempts`,
+        [accountId],
+      );
+      const locked = (updated.rows[0]?.failed_attempts ?? 0) >= this.policy!.maxFailedAttempts;
+      if (locked) {
+        await tx.query(
+          `UPDATE iam.account SET status='LOCKED', locked_at=now(), version=version+1 WHERE id=$1`,
+          [accountId],
+        );
+        await tx.query(
+          `UPDATE iam.session SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL`,
+          [accountId],
+        );
+      }
+      await this.appendAudit(tx, {
+        actorId: null,
+        actorRole: 'SYSTEM',
+        action: locked ? 'ACCOUNT_LOCKED' : 'LOGIN_FAILED',
+        subjectType: 'ACCOUNT',
+        subjectId: accountId,
+        requestId: meta.requestId,
+      });
+    });
+  }
+
+  private async saveProfileStep(
+    tx: Sql,
+    userId: string,
+    step: string,
+    expectedVersion: number,
+    data: Record<string, unknown>,
+    meta: RequestMeta,
+  ) {
+    const existing = await tx.query<{
+      version: number;
+      profile_data: Record<string, unknown>;
+      completed_steps: string[];
+    }>(
+      `SELECT version, profile_data, completed_steps
+       FROM care.user_profile WHERE user_id=$1`,
+      [userId],
+    );
+    if (!existing.rows[0]) {
+      if (expectedVersion !== 0) {
+        throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+      }
+      await tx.query(
+        `INSERT INTO care.user_profile
+           (id, user_id, profile_data, completed_steps, version)
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, 1)`,
+        [randomUUID(), userId, JSON.stringify({ [step]: data }), JSON.stringify([step])],
+      );
+      return { businessStatus: 'PROFILE_DRAFT_SAVED', requestId: meta.requestId, version: 1 };
+    }
+    const row = existing.rows[0];
+    if (row.version !== expectedVersion) {
+      throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+    }
+    const profile = { ...row.profile_data, [step]: data };
+    const steps = Array.from(new Set([...row.completed_steps, step]));
+    const saved = await tx.query<{ version: number }>(
+      `UPDATE care.user_profile
+       SET profile_data=$1::jsonb, completed_steps=$2::jsonb,
+           version=version+1, updated_at=now()
+       WHERE user_id=$3 AND version=$4 RETURNING version`,
+      [JSON.stringify(profile), JSON.stringify(steps), userId, expectedVersion],
+    );
+    if (!saved.rows[0]) {
+      throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
+    }
+    return {
+      businessStatus: 'PROFILE_DRAFT_SAVED',
+      requestId: meta.requestId,
+      version: saved.rows[0].version,
+    };
+  }
+
+  private invitationRole(
+    principal: Principal,
+    input: { accountType: 'USER' | 'STAFF'; roles: StaffRole[] },
+  ): 'OPERATIONS' | 'SYSTEM_ADMIN' {
+    if (principal.activeRole === 'OPERATIONS') {
+      if (input.accountType === 'USER' && input.roles.length === 0) return 'OPERATIONS';
+    }
+    if (principal.activeRole === 'SYSTEM_ADMIN' && input.accountType === 'STAFF') {
+      return 'SYSTEM_ADMIN';
+    }
+    throw new ForbiddenException({
+      businessStatus: 'WRITE_REJECTED',
+      errorCode: 'ROLE_NOT_AUTHORIZED',
+      recoverableActions: [],
+    });
+  }
+
+  private qualifiedReviewerRole(principal: Principal): 'NUTRITION_REVIEWER' | 'TRAINING_REVIEWER' {
+    if (principal.activeRole !== 'NUTRITION_REVIEWER' && principal.activeRole !== 'TRAINING_REVIEWER') {
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'ROLE_NOT_AUTHORIZED',
+        recoverableActions: [],
+      });
+    }
+    const grant = principal.roles.find((candidate) => candidate.code === principal.activeRole);
+    if (grant?.qualifiedAt) return principal.activeRole;
+    throw new ForbiddenException({
+      businessStatus: 'WRITE_REJECTED',
+      errorCode: 'PROFESSIONAL_QUALIFICATION_REQUIRED',
+      recoverableActions: [],
+    });
+  }
+
+  private requireRole(principal: Principal, role: StaffRole) {
+    if (principal.activeRole !== role || !this.hasRole(principal, role)) {
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'ROLE_NOT_AUTHORIZED',
+        recoverableActions: [],
+      });
+    }
+  }
+
+  private hasRole(principal: Principal, role: StaffRole): boolean {
+    return principal.roles.some((grant) => grant.code === role);
+  }
+
+  private resolveCredentialRole(principal: Principal, actingRole?: StaffRole): ActorRole {
+    if (principal.accountType === 'USER') {
+      if (!actingRole) return 'USER';
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'ROLE_NOT_AUTHORIZED',
+        recoverableActions: [],
+      });
+    }
+    if (!actingRole || !this.hasRole(principal, actingRole)) {
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'ROLE_NOT_AUTHORIZED',
+        recoverableActions: [],
+      });
+    }
+    return actingRole;
+  }
+
+  private async verifyMfa(principal: Principal, challengeId?: string): Promise<boolean> {
+    if (principal.accountType !== 'STAFF' || !this.policy!.mfaRequiredForStaff) return false;
+    if (!this.mfaVerifier) {
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'MFA_VERIFIER_UNAVAILABLE',
+        recoverableActions: [],
+      });
+    }
+    if (!challengeId || !await this.mfaVerifier.verify({ accountId: principal.accountId, challengeId })) {
+      throw new ForbiddenException({
+        businessStatus: 'WRITE_REJECTED',
+        errorCode: 'MFA_REQUIRED',
+        recoverableActions: ['COMPLETE_MFA'],
+      });
+    }
+    return true;
+  }
+
+  private async requireSession(token: string, kind: 'USER' | 'STAFF'): Promise<Principal> {
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const result = await this.db.database.query<{ account_id: string; session_kind: string; active_role: ActorRole | null }>(
+      `SELECT s.account_id, s.session_kind, s.active_role
+       FROM iam.session s
+       JOIN iam.account a ON a.id=s.account_id
+       WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now()
+         AND a.status='ACTIVE'`,
+      [tokenHash],
+    );
+    const session = result.rows[0];
+    if (!session || session.session_kind !== kind || !session.active_role) {
+      throw new UnauthorizedException({
+        businessStatus: 'SESSION_INVALID',
+        errorCode: 'SESSION_INVALID',
+        recoverableActions: ['LOGIN'],
+      });
+    }
+    const account = await this.accountById(session.account_id);
+    if (!account) throw new UnauthorizedException({ errorCode: 'SESSION_INVALID' });
+    return this.principalForAccount(account, session.active_role);
+  }
+
+  private async principalForAccount(account: AccountRow, activeRole: ActorRole | null = null): Promise<Principal> {
+    const roles = account.account_type === 'STAFF'
+      ? await this.db.database.query<{ code: StaffRole; qualifiedAt: Date | null }>(
+          `SELECT role_code AS code, qualified_at AS "qualifiedAt"
+           FROM iam.account_role WHERE account_id=$1 ORDER BY role_code`,
+          [account.id],
+        )
+      : { rows: [] as RoleGrant[] };
+    return { accountId: account.id, accountType: account.account_type, roles: roles.rows, activeRole };
+  }
+
+  private async accountById(id: string): Promise<AccountRow | undefined> {
+    return (await this.db.database.query<AccountRow>(`SELECT * FROM iam.account WHERE id=$1`, [id])).rows[0];
+  }
+
+  private async accountByLogin(loginIdentifier: string): Promise<AccountRow | undefined> {
+    return (await this.db.database.query<AccountRow>(
+      `SELECT * FROM iam.account WHERE login_identifier=$1`,
+      [loginIdentifier],
+    )).rows[0];
+  }
+
+  private principalScope(principal: Principal, actorRole: ActorRole): string {
+    return `${principal.accountId}:${actorRole}`;
+  }
+
+  private fingerprint(value: unknown): string {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  }
+
+  private parseJson(value: unknown): unknown {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  }
+
+  private requirePolicy() {
+    if (!this.environment.authSecurityPolicyApproved || !this.policy?.approved) {
+      throw new ServiceUnavailableException({
+        businessStatus: 'IDENTITY_BLOCKED',
+        errorCode: 'AUTH_SECURITY_POLICY_UNAPPROVED',
+        recoverableActions: ['WAIT_FOR_SECURITY_APPROVAL'],
+      });
+    }
+  }
+
+  private error(meta: RequestMeta, errorCode: string, recoverableActions: string[] = []) {
+    return {
+      businessStatus: 'WRITE_REJECTED',
+      errorCode,
+      recoverableActions,
+      requestId: meta.requestId,
+    };
+  }
 }

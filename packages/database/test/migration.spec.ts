@@ -60,6 +60,35 @@ describe('core database migration', () => {
     `)).rejects.toThrow();
   });
 
+  it('adds scoped idempotency metadata and controlled system audit actors', async () => {
+    database = new PGlite();
+    await applyMigrations(database);
+
+    const columns = await database.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'audit' AND table_name = 'idempotency_key'
+    `);
+    expect(columns.rows.map((row) => row.column_name)).toEqual(expect.arrayContaining([
+      'operation',
+      'principal_scope',
+      'request_fingerprint',
+    ]));
+
+    const sessionColumns = await database.query<{ column_name: string }>(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema='iam' AND table_name='session'
+    `);
+    expect(sessionColumns.rows.map((row) => row.column_name)).toContain('active_role');
+
+    await expect(database.query(`
+      INSERT INTO audit.audit_event
+        (id, actor_id, actor_role, action, subject_type, subject_id, request_id)
+      VALUES
+        ('system-audit', NULL, 'SYSTEM', 'LOGIN_FAILED', 'ACCOUNT', 'account-1', 'request-1')
+    `)).resolves.toBeDefined();
+  });
+
   it('enforces unique login identifiers', async () => {
     database = new PGlite();
     await applyMigrations(database);

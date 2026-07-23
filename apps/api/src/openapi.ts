@@ -5,7 +5,8 @@ export function createOpenApiDocument(app: INestApplication) {
   const config = new DocumentBuilder()
     .setTitle('Lianban V1.0 API')
     .setDescription('Stable engineering contract through the identity and onboarding slice')
-    .setVersion('0.3.0')
+    .setVersion('0.4.0')
+    .addBearerAuth()
     .build();
 
   return SwaggerModule.createDocument(app, config);

@@ -9,10 +9,11 @@ import { DatabaseService } from './database/database.service.js';
 import { IdentityOnboardingController } from './identity/identity-onboarding.controller.js';
 import { AUTH_POLICY, IdentityOnboardingService } from './identity/identity-onboarding.service.js';
 import type { AuthSecurityPolicy } from '@lianban/domain';
+import { MFA_VERIFIER, type MfaVerifier } from './identity/mfa-verifier.js';
 
 @Module({})
 export class AppModule {
-  static forEnvironment(environment: Environment, authPolicy: AuthSecurityPolicy | null = null): DynamicModule {
+  static forEnvironment(environment: Environment, authPolicy: AuthSecurityPolicy | null = null, mfaVerifier: MfaVerifier | null = null): DynamicModule {
     return {
       module: AppModule,
       controllers: [
@@ -28,6 +29,7 @@ export class AppModule {
         DatabaseService,
         IdentityOnboardingService,
         { provide: AUTH_POLICY, useValue: authPolicy },
+        { provide: MFA_VERIFIER, useValue: mfaVerifier },
       ],
     };
   }
