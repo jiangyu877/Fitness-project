@@ -154,7 +154,23 @@ export class IdentityOnboardingService {
       throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
     }
     const principal = await this.principalForAccount(account);
-    const actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    let actorRole: ActorRole;
+    try {
+      actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    } catch (error) {
+      if (!await verifyPassword(input.currentPassword, account.password_hash)) {
+        throw new UnauthorizedException(this.error(meta, 'INVALID_CREDENTIALS'));
+      }
+      await this.auditAuthenticatedRejection(
+        principal,
+        'PASSWORD_CHANGE_REJECTED',
+        'ACCOUNT',
+        account.id,
+        meta,
+        error,
+      );
+      throw error;
+    }
     const operation = 'IDENTITY_INITIAL_PASSWORD_CHANGE';
     const principalScope = this.principalScope(principal, actorRole);
     const fingerprintPayload = {
@@ -251,11 +267,33 @@ export class IdentityOnboardingService {
     }
     const expectedKind = account.account_type === 'USER' ? 'USER' : 'STAFF';
     if (input.sessionKind !== expectedKind) {
+      await this.appendRejectedAudit({
+        actorId: account.id,
+        actorRole: 'SYSTEM',
+        action: 'SESSION_CREATION_REJECTED',
+        subjectType: 'ACCOUNT',
+        subjectId: account.id,
+        requestId: meta.requestId,
+        errorCode: 'SESSION_KIND_MISMATCH',
+      });
       throw new ForbiddenException(this.error(meta, 'SESSION_KIND_MISMATCH'));
     }
 
     const principal = await this.principalForAccount(account);
-    const actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    let actorRole: ActorRole;
+    try {
+      actorRole = this.resolveCredentialRole(principal, input.actingRole);
+    } catch (error) {
+      await this.auditAuthenticatedRejection(
+        principal,
+        'SESSION_CREATION_REJECTED',
+        'ACCOUNT',
+        account.id,
+        meta,
+        error,
+      );
+      throw error;
+    }
     principal.activeRole = actorRole;
     let mfaVerified: boolean;
     try {
@@ -343,7 +381,19 @@ export class IdentityOnboardingService {
     meta: RequestMeta,
   ) {
     const principal = await this.requireSession(token, 'STAFF', meta);
-    this.requireRole(principal, 'SYSTEM_ADMIN');
+    try {
+      this.requireRole(principal, 'SYSTEM_ADMIN');
+    } catch (error) {
+      await this.auditAuthenticatedRejection(
+        principal,
+        'ACCOUNT_STATUS_CHANGE_REJECTED',
+        'ACCOUNT',
+        accountId,
+        meta,
+        error,
+      );
+      throw error;
+    }
     return this.write({
       meta,
       operation: 'IDENTITY_ACCOUNT_STATUS',

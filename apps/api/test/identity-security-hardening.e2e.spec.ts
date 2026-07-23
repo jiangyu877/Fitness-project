@@ -579,6 +579,137 @@ describe('identity security hardening', () => {
     );
     expect(keys.rows[0]?.count).toBe(0);
   });
+
+  it('audits an operations account-status denial once without business side effects', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'status-operations', 'OPERATIONS');
+    await seedActiveUser(app, 'status-target');
+    const agent = request(app.getHttpServer());
+    const token = await login(agent, 'status-operations', 'seed-password-1', 'OPERATIONS');
+
+    await agent.post('/api/v1/identity/accounts/status-target/status')
+      .set(writeHeaders('status-role-denied'))
+      .set('Authorization', `Bearer ${token}`)
+      .send({ status: 'DISABLED', expectedVersion: 1 })
+      .expect(403)
+      .expect(({ body }) => expect(body.errorCode).toBe('ROLE_NOT_AUTHORIZED'));
+
+    const database = app.get(DatabaseService).database;
+    const target = await database.query<{ status: string; version: number }>(
+      'SELECT status, version FROM iam.account WHERE id=$1',
+      ['status-target'],
+    );
+    const keys = await database.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM audit.idempotency_key WHERE key='status-role-denied'`,
+    );
+    const audits = await database.query<{
+      actor_id: string;
+      actor_role: string;
+      action: string;
+      subject_id: string;
+      error_code: string;
+    }>(
+      `SELECT actor_id, actor_role, action, subject_id, error_code
+       FROM audit.audit_event WHERE request_id='status-role-denied' AND outcome='REJECTED'`,
+    );
+    expect(target.rows[0]).toEqual({ status: 'ACTIVE', version: 1 });
+    expect(keys.rows[0]?.count).toBe(0);
+    expect(audits.rows).toEqual([{
+      actor_id: 'status-operations',
+      actor_role: 'OPERATIONS',
+      action: 'ACCOUNT_STATUS_CHANGE_REJECTED',
+      subject_id: 'status-target',
+      error_code: 'ROLE_NOT_AUTHORIZED',
+    }]);
+  });
+
+  it('audits a verified session-kind mismatch with a controlled system actor role', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'kind-mismatch-staff', 'OPERATIONS');
+    const agent = request(app.getHttpServer());
+
+    await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('kind-mismatch-login', { actorId: 'forged', actorRole: 'SYSTEM_ADMIN' }))
+      .send({
+        loginIdentifier: 'kind-mismatch-staff',
+        password: 'seed-password-1',
+        sessionKind: 'USER',
+      })
+      .expect(403)
+      .expect(({ body }) => expect(body.errorCode).toBe('SESSION_KIND_MISMATCH'));
+
+    expect(await rejectionAudit(app, 'kind-mismatch-login')).toEqual([{
+      actor_id: 'kind-mismatch-staff',
+      actor_role: 'SYSTEM',
+      error_code: 'SESSION_KIND_MISMATCH',
+    }]);
+  });
+
+  it('audits missing or ungranted login acting roles without guessing a staff role', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'acting-role-staff', 'OPERATIONS');
+    const agent = request(app.getHttpServer());
+
+    for (const [requestId, actingRole] of [
+      ['missing-login-role', undefined],
+      ['ungranted-login-role', 'SYSTEM_ADMIN'],
+    ] as const) {
+      await agent.post('/api/v1/identity/sessions')
+        .set(writeHeaders(requestId))
+        .send({
+          loginIdentifier: 'acting-role-staff',
+          password: 'seed-password-1',
+          sessionKind: 'STAFF',
+          ...(actingRole ? { actingRole } : {}),
+        })
+        .expect(403)
+        .expect(({ body }) => expect(body.errorCode).toBe('ROLE_NOT_AUTHORIZED'));
+      expect(await rejectionAudit(app, requestId)).toEqual([{
+        actor_id: 'acting-role-staff',
+        actor_role: 'SYSTEM',
+        error_code: 'ROLE_NOT_AUTHORIZED',
+      }]);
+    }
+    expect(await sessionCount(app, 'acting-role-staff')).toBe(0);
+  });
+
+  it('audits staff initial-password role rejection only after credential verification', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedAccount(app, 'change-role-staff', 'STAFF', 'INVITED', true);
+    await app.get(DatabaseService).database.query(
+      `INSERT INTO iam.account_role (account_id, role_code)
+       VALUES ('change-role-staff', 'OPERATIONS')`,
+    );
+    const agent = request(app.getHttpServer());
+
+    await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('change-role-missing'))
+      .send({
+        accountId: 'change-role-staff',
+        currentPassword: 'seed-password-1',
+        newPassword: 'changed-password-1',
+        expectedVersion: 1,
+      })
+      .expect(403);
+    expect(await rejectionAudit(app, 'change-role-missing')).toEqual([{
+      actor_id: 'change-role-staff',
+      actor_role: 'SYSTEM',
+      error_code: 'ROLE_NOT_AUTHORIZED',
+    }]);
+
+    await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('change-role-wrong-password'))
+      .send({
+        accountId: 'change-role-staff',
+        currentPassword: 'wrong-password-1',
+        newPassword: 'changed-password-1',
+        expectedVersion: 1,
+        actingRole: 'SYSTEM_ADMIN',
+      })
+      .expect(401)
+      .expect(({ body }) => expect(body.errorCode).toBe('INVALID_CREDENTIALS'));
+    expect(await rejectionAudit(app, 'change-role-wrong-password')).toEqual([]);
+  });
 });
 
 function sha256(value: string): string {
@@ -738,4 +869,17 @@ async function rejectedAuditCount(
     [requestId, errorCode],
   );
   return result.rows[0]?.count ?? 0;
+}
+
+async function rejectionAudit(target: INestApplication, requestId: string) {
+  const result = await target.get(DatabaseService).database.query<{
+    actor_id: string | null;
+    actor_role: string;
+    error_code: string;
+  }>(
+    `SELECT actor_id, actor_role, error_code FROM audit.audit_event
+     WHERE request_id=$1 AND outcome='REJECTED' ORDER BY occurred_at`,
+    [requestId],
+  );
+  return result.rows;
 }
