@@ -19,6 +19,9 @@ export type PlanVersion = {
   confirmationDeadlineAt: Date;
   effectiveAt: Date;
   effectiveTo: Date | null;
+  publishedAt: Date | null;
+  confirmationTimedOutAt: Date | null;
+  rejectionReasonCode: string | null;
   dietReview: ReviewStatus;
   trainingReview: ReviewStatus;
   dietReviewerId: string | null;
@@ -31,24 +34,33 @@ export type PlanEvent =
   | { type: 'SUBMIT_REVIEW' }
   | { type: 'APPROVE_DIET'; actorId: string }
   | { type: 'APPROVE_TRAINING'; actorId: string }
-  | { type: 'PUBLISH' }
+  | { type: 'REJECT_DIET_REVIEW'; actorId: string; reasonCode: string }
+  | { type: 'REJECT_TRAINING_REVIEW'; actorId: string; reasonCode: string }
+  | { type: 'PUBLISH'; occurredAt: Date }
   | { type: 'CONFIRM_DIET'; occurredAt: Date }
   | { type: 'CONFIRM_TRAINING'; occurredAt: Date }
-  | { type: 'EXPIRE_CONFIRMATION'; occurredAt: Date };
+  | { type: 'REJECT_DIET'; occurredAt: Date; reasonCode: string }
+  | { type: 'REJECT_TRAINING'; occurredAt: Date; reasonCode: string }
+  | { type: 'EXPIRE_CONFIRMATION'; occurredAt: Date }
+  | { type: 'ACTIVATE'; occurredAt: Date }
+  | { type: 'SUPERSEDE'; occurredAt: Date };
 
 export function createDraftPlan(
   id: string,
   userId: string,
-  confirmationDeadlineAt: Date,
   effectiveAt: Date,
+  effectiveTo: Date | null = null,
 ): PlanVersion {
   return {
     id,
     userId,
     status: 'DRAFT',
-    confirmationDeadlineAt,
+    confirmationDeadlineAt: calculateConfirmationDeadline(effectiveAt),
     effectiveAt,
-    effectiveTo: null,
+    effectiveTo,
+    publishedAt: null,
+    confirmationTimedOutAt: null,
+    rejectionReasonCode: null,
     dietReview: 'NOT_SUBMITTED',
     trainingReview: 'NOT_SUBMITTED',
     dietReviewerId: null,
@@ -82,6 +94,24 @@ export function transitionPlan(plan: PlanVersion, event: PlanEvent): PlanVersion
         trainingReview: 'APPROVED',
         trainingReviewerId: event.actorId,
       });
+    case 'REJECT_DIET_REVIEW':
+      requireStatus(plan, 'IN_REVIEW');
+      return {
+        ...plan,
+        status: 'STAFF_REVISION_REQUIRED',
+        dietReview: 'REJECTED',
+        dietReviewerId: event.actorId,
+        rejectionReasonCode: event.reasonCode,
+      };
+    case 'REJECT_TRAINING_REVIEW':
+      requireStatus(plan, 'IN_REVIEW');
+      return {
+        ...plan,
+        status: 'STAFF_REVISION_REQUIRED',
+        trainingReview: 'REJECTED',
+        trainingReviewerId: event.actorId,
+        rejectionReasonCode: event.reasonCode,
+      };
     case 'PUBLISH':
       if (plan.dietReview !== 'APPROVED') {
         throw new Error('DIET_REVIEW_REQUIRED');
@@ -90,18 +120,55 @@ export function transitionPlan(plan: PlanVersion, event: PlanEvent): PlanVersion
         throw new Error('TRAINING_REVIEW_REQUIRED');
       }
       requireStatus(plan, 'READY_TO_PUBLISH');
-      return { ...plan, status: 'PENDING_CONFIRMATION' };
+      if (event.occurredAt.getTime() > plan.confirmationDeadlineAt.getTime() - 86_400_000) {
+        throw new Error('PUBLICATION_LEAD_TIME_INSUFFICIENT');
+      }
+      return { ...plan, status: 'PENDING_CONFIRMATION', publishedAt: event.occurredAt };
     case 'CONFIRM_DIET':
       return confirmPlanPart(plan, 'dietConfirmed', event.occurredAt);
     case 'CONFIRM_TRAINING':
       return confirmPlanPart(plan, 'trainingConfirmed', event.occurredAt);
+    case 'REJECT_DIET':
+    case 'REJECT_TRAINING':
+      requireStatus(plan, 'PENDING_CONFIRMATION');
+      requireBeforeDeadline(plan, event.occurredAt);
+      return {
+        ...plan,
+        status: 'USER_REVISION_REQUIRED',
+        rejectionReasonCode: event.reasonCode,
+      };
     case 'EXPIRE_CONFIRMATION':
       requireStatus(plan, 'PENDING_CONFIRMATION');
       if (event.occurredAt < plan.confirmationDeadlineAt) {
         throw new Error('CONFIRMATION_DEADLINE_NOT_REACHED');
       }
-      return { ...plan, status: 'CONFIRMATION_TIMED_OUT' };
+      return {
+        ...plan,
+        status: 'CONFIRMATION_TIMED_OUT',
+        confirmationTimedOutAt: event.occurredAt,
+      };
+    case 'ACTIVATE':
+      requireStatus(plan, 'SCHEDULED');
+      if (event.occurredAt < plan.effectiveAt) {
+        throw new Error('EFFECTIVE_TIME_NOT_REACHED');
+      }
+      return { ...plan, status: 'ACTIVE' };
+    case 'SUPERSEDE':
+      requireStatus(plan, 'ACTIVE');
+      return { ...plan, status: 'SUPERSEDED', effectiveTo: event.occurredAt };
   }
+}
+
+export function calculateConfirmationDeadline(effectiveAt: Date): Date {
+  const cstInstant = new Date(effectiveAt.getTime() + 8 * 60 * 60 * 1000);
+  return new Date(
+    Date.UTC(
+      cstInstant.getUTCFullYear(),
+      cstInstant.getUTCMonth(),
+      cstInstant.getUTCDate() - 1,
+      12,
+    ),
+  );
 }
 
 export function canCreatePendingVersion(
@@ -134,14 +201,18 @@ function confirmPlanPart(
   occurredAt: Date,
 ): PlanVersion {
   requireStatus(plan, 'PENDING_CONFIRMATION');
-  if (occurredAt >= plan.confirmationDeadlineAt) {
-    throw new Error('CONFIRMATION_DEADLINE_PASSED');
-  }
+  requireBeforeDeadline(plan, occurredAt);
 
   const updated = { ...plan, [field]: true };
   return updated.dietConfirmed && updated.trainingConfirmed
     ? { ...updated, status: 'SCHEDULED' }
     : updated;
+}
+
+function requireBeforeDeadline(plan: PlanVersion, occurredAt: Date): void {
+  if (occurredAt >= plan.confirmationDeadlineAt) {
+    throw new Error('CONFIRMATION_DEADLINE_PASSED');
+  }
 }
 
 function finishReview(plan: PlanVersion): PlanVersion {
