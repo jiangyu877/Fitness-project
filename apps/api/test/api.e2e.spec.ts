@@ -10,6 +10,8 @@ const baseEnvironment: Environment = {
   databasePath: 'memory://',
   demoMode: true,
   professionalRulesApproved: false,
+  authSecurityPolicyApproved: false,
+  privacyReviewApproved: false,
 };
 
 describe('phase 1 HTTP API contract', () => {
@@ -37,8 +39,21 @@ describe('phase 1 HTTP API contract', () => {
       .expect(200)
       .expect({
         readyForRealUsers: false,
-        blockers: ['PROFESSIONAL_RULES_UNAPPROVED'],
+        blockers: [
+          'PROFESSIONAL_RULES_UNAPPROVED',
+          'AUTH_SECURITY_POLICY_UNAPPROVED',
+          'PRIVACY_REVIEW_UNAPPROVED',
+        ],
       });
+  });
+
+  it('does not become ready from professional approval alone', async () => {
+    app = await buildApplication({ ...baseEnvironment, professionalRulesApproved: true });
+    const response = await request(app.getHttpServer()).get('/api/v1/readiness').expect(200);
+    expect(response.body).toEqual({
+      readyForRealUsers: false,
+      blockers: ['AUTH_SECURITY_POLICY_UNAPPROVED', 'PRIVACY_REVIEW_UNAPPROVED'],
+    });
   });
 
   it.each([

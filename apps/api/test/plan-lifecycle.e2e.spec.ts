@@ -10,6 +10,8 @@ const approvedEnvironment: Environment = {
   databasePath: 'memory://',
   demoMode: false,
   professionalRulesApproved: true,
+  authSecurityPolicyApproved: true,
+  privacyReviewApproved: true,
 };
 
 const effectiveAt = '2026-08-10T00:00:00.000Z';

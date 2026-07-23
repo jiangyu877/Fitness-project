@@ -31,6 +31,20 @@ describe('parseEnvironment', () => {
       databasePath: 'memory://',
       demoMode: true,
       professionalRulesApproved: false,
+      authSecurityPolicyApproved: false,
+      privacyReviewApproved: false,
+    });
+  });
+
+  it('parses external security and privacy approvals explicitly', () => {
+    expect(parseEnvironment({
+      NODE_ENV: 'test',
+      DATABASE_PATH: 'memory://',
+      AUTH_SECURITY_POLICY_APPROVED: 'true',
+      PRIVACY_REVIEW_APPROVED: 'true',
+    })).toMatchObject({
+      authSecurityPolicyApproved: true,
+      privacyReviewApproved: true,
     });
   });
 });

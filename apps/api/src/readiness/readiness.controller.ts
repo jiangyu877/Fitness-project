@@ -18,18 +18,31 @@ export class ReadinessController {
         readyForRealUsers: { type: 'boolean' },
         blockers: {
           type: 'array',
-          items: { type: 'string', enum: ['PROFESSIONAL_RULES_UNAPPROVED'] },
+          items: {
+            type: 'string',
+            enum: [
+              'PROFESSIONAL_RULES_UNAPPROVED',
+              'AUTH_SECURITY_POLICY_UNAPPROVED',
+              'PRIVACY_REVIEW_UNAPPROVED',
+            ],
+          },
         },
       },
     },
   })
   getReadiness(): {
     readyForRealUsers: boolean;
-    blockers: Array<'PROFESSIONAL_RULES_UNAPPROVED'>;
+    blockers: ReadinessBlocker[];
   } {
-    const blockers: Array<'PROFESSIONAL_RULES_UNAPPROVED'> = [];
+    const blockers: ReadinessBlocker[] = [];
     if (!this.environment.professionalRulesApproved) {
       blockers.push('PROFESSIONAL_RULES_UNAPPROVED');
+    }
+    if (!this.environment.authSecurityPolicyApproved) {
+      blockers.push('AUTH_SECURITY_POLICY_UNAPPROVED');
+    }
+    if (!this.environment.privacyReviewApproved) {
+      blockers.push('PRIVACY_REVIEW_UNAPPROVED');
     }
 
     return {
@@ -38,3 +51,8 @@ export class ReadinessController {
     };
   }
 }
+
+type ReadinessBlocker =
+  | 'PROFESSIONAL_RULES_UNAPPROVED'
+  | 'AUTH_SECURITY_POLICY_UNAPPROVED'
+  | 'PRIVACY_REVIEW_UNAPPROVED';

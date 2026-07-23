@@ -18,6 +18,8 @@ describe('OpenAPI contract', () => {
       databasePath: 'memory://',
       demoMode: true,
       professionalRulesApproved: false,
+      authSecurityPolicyApproved: false,
+      privacyReviewApproved: false,
     });
 
     const document = createOpenApiDocument(app);
