@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { demoSafety } from '../phase3/phase3-model.js';
+import { createIdentityClient, IdentityError, type IdentityClient, type NextAction } from '../identity/identity-client.js';
+import { identityPathForNextAction } from '../identity/identity-next-action-page.js';
+
+export const defaultIdentityClient = createIdentityClient();
 
 export type AuthOnboardingKind =
   | 'invited-login'
@@ -10,7 +14,21 @@ export type AuthOnboardingKind =
   | 'screening'
   | 'profile'
   | 'preparation'
-  | 'staff-login';
+  | 'staff-login'
+  | 'contact-operations';
+
+export function pathForNextAction(nextAction: string | undefined): string {
+  return (nextAction ? identityPathForNextAction(nextAction as NextAction) : undefined) ?? '/h5/identity/contact-operations';
+}
+
+function messageFor(error: unknown): string {
+  if (!(error instanceof IdentityError)) return '网络连接不可用，请检查连接后重试。';
+  if (error.status === 401) return '登录或首次改密会话已失效，请重新登录。';
+  if (error.status === 409) return '当前版本已变化，请联系运营后重新开始。';
+  if (error.status === 423) return '账号当前不可用，请联系运营。';
+  if (error.status === 503) return '服务暂不可用，请稍后重试。';
+  return '身份请求未完成，请稍后重试。';
+}
 
 function Page({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -25,29 +43,96 @@ function Page({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function InvitedLogin() {
+function InvitedLogin({ identityClient, onSessionCreated }: { identityClient: IdentityClient; onSessionCreated?: () => Promise<void> }) {
+  const navigate = useNavigate();
+  const [loginId, setLoginId] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+  const summaryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (error) summaryRef.current?.focus(); }, [error]);
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(undefined);
+    setSubmitting(true);
+    try {
+      const result = await identityClient.createSession({ loginId, password });
+      if (result.kind === 'session-created') await onSessionCreated?.();
+      navigate(pathForNextAction(result.nextAction), { replace: true });
+    } catch (requestError) {
+      setError(messageFor(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <Page title="受邀登录">
-      <div role="status" className="state-panel">会话可恢复：授权步骤尚未完成</div>
-      <label>受邀账号<input autoComplete="username" /></label>
-      <label>密码<input type="password" autoComplete="current-password" /></label>
-      <button className="button">登录演示账号</button>
+      <div role="status" className="state-panel">会话可恢复：使用受邀账号继续服务流程。</div>
+      {error && <div ref={summaryRef} tabIndex={-1} role="alert" aria-live="assertive">{error}</div>}
+      <form onSubmit={submit}>
+        <label>受邀账号<input value={loginId} onChange={(event) => setLoginId(event.target.value)} autoComplete="username" required /></label>
+        <label>密码<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required /></label>
+        <button className="button" disabled={submitting}>{submitting ? '登录中' : '登录'}</button>
+      </form>
+      <Link to="/h5/identity/contact-operations">联系运营</Link>
     </Page>
   );
 }
 
-function ChangePassword() {
-  const [invalid, setInvalid] = useState(false);
+function ChangePassword({ identityClient, onSessionCreated }: { identityClient: IdentityClient; onSessionCreated?: () => Promise<void> }) {
+  const navigate = useNavigate();
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [error, setError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
   const summaryRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (invalid) summaryRef.current?.focus(); }, [invalid]);
+  useEffect(() => { if (error) summaryRef.current?.focus(); }, [error]);
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!newPassword || !confirmation) return setError('请检查：新密码与确认密码均为必填。');
+    if (newPassword !== confirmation) return setError('请检查：新密码与确认新密码必须一致。');
+    setError(undefined);
+    setSubmitting(true);
+    try {
+      const context = identityClient.getRestrictedContext();
+      const result = await identityClient.changeInitialPassword({ newPassword, expectedVersion: context?.expectedVersion ?? 0 });
+      await onSessionCreated?.();
+      navigate(pathForNextAction(result.nextAction), { replace: true });
+    } catch (requestError) {
+      setError(messageFor(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  }
   return (
     <Page title="首次修改密码">
-      {invalid && <div ref={summaryRef} tabIndex={-1} role="alert">请检查：新密码与确认密码均为必填。</div>}
-      <label>新密码<input type="password" autoComplete="new-password" /></label>
-      <label>确认新密码<input type="password" autoComplete="new-password" /></label>
-      <button className="button" onClick={() => setInvalid(true)}>保存新密码</button>
+      {error && <div ref={summaryRef} tabIndex={-1} role="alert" aria-live="assertive">{error}</div>}
+      <form onSubmit={submit}>
+        <label>新密码<input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type="password" autoComplete="new-password" /></label>
+        <label>确认新密码<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} type="password" autoComplete="new-password" /></label>
+        <button className="button" disabled={submitting}>{submitting ? '保存中' : '保存新密码'}</button>
+      </form>
+      <Link to="/h5/identity/contact-operations">无法完成首次改密？联系运营</Link>
     </Page>
   );
+}
+
+function ContactOperations({ identityClient }: { identityClient: IdentityClient }) {
+  const navigate = useNavigate();
+  const [error, setError] = useState<string>();
+  const summaryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (error) summaryRef.current?.focus(); }, [error]);
+  async function logout() {
+    setError(undefined);
+    try {
+      await identityClient.logout();
+      navigate('/h5/login', { replace: true });
+    } catch (logoutError) {
+      setError(messageFor(logoutError));
+    }
+  }
+  return <Page title="联系运营"><div className="state-panel" role="status">当前账号或流程需要人工处理，请联系运营人员。</div>{error && <div ref={summaryRef} tabIndex={-1} role="alert" aria-live="assertive">{error}</div>}<button className="button button--secondary" onClick={() => void logout()}>退出登录</button></Page>;
 }
 
 function Consent() {
@@ -127,14 +212,19 @@ function StaffLogin() {
   );
 }
 
-export function AuthOnboardingPage({ kind }: { kind: AuthOnboardingKind }) {
+export function AuthOnboardingPage({ kind, identityClient = defaultIdentityClient, onSessionCreated }: {
+  kind: AuthOnboardingKind;
+  identityClient?: IdentityClient;
+  onSessionCreated?: () => Promise<void>;
+}) {
   switch (kind) {
-    case 'invited-login': return <InvitedLogin />;
-    case 'change-password': return <ChangePassword />;
+    case 'invited-login': return <InvitedLogin identityClient={identityClient} {...(onSessionCreated ? { onSessionCreated } : {})} />;
+    case 'change-password': return <ChangePassword identityClient={identityClient} {...(onSessionCreated ? { onSessionCreated } : {})} />;
     case 'consent': return <Consent />;
     case 'screening': return <Screening />;
     case 'profile': return <Profile />;
     case 'preparation': return <Preparation />;
     case 'staff-login': return <StaffLogin />;
+    case 'contact-operations': return <ContactOperations identityClient={identityClient} />;
   }
 }

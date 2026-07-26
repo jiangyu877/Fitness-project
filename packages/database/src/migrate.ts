@@ -30,9 +30,23 @@ const migrations = [
     version: '007_identity_audit_outcomes',
     file: '007_identity_audit_outcomes.sql',
   },
+  {
+    version: '008_identity_recovery_sessions',
+    file: '008_identity_recovery_sessions.sql',
+  },
+  {
+    version: '009_plan_lifecycle_persistence',
+    file: '009_plan_lifecycle_persistence.sql',
+  },
 ] as const;
 
+export type MigrationVersion = (typeof migrations)[number]['version'];
+
 export async function applyMigrations(database: PGlite): Promise<void> {
+  await applyMigrationsThrough(database, migrations.at(-1)!.version);
+}
+
+export async function applyMigrationsThrough(database: PGlite, targetVersion: MigrationVersion): Promise<void> {
   await database.exec(`
     CREATE TABLE IF NOT EXISTS public.schema_migration (
       version text PRIMARY KEY,
@@ -40,7 +54,10 @@ export async function applyMigrations(database: PGlite): Promise<void> {
     )
   `);
 
-  for (const migration of migrations) {
+  const targetIndex = migrations.findIndex((migration) => migration.version === targetVersion);
+  if (targetIndex < 0) throw new Error(`UNKNOWN_MIGRATION_VERSION:${targetVersion}`);
+
+  for (const migration of migrations.slice(0, targetIndex + 1)) {
     const existing = await database.query<{ version: string }>(
       'SELECT version FROM public.schema_migration WHERE version = $1',
       [migration.version],

@@ -18,15 +18,24 @@ import {
   UserRound,
   Utensils,
 } from 'lucide-react';
-import React, { useState } from 'react';
-import { Link, Navigate, useLocation } from 'react-router-dom';
+import React, { Suspense, useEffect, useState } from 'react';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
-import { demoPersonas, prototypeDisclaimer, type DemoPersona } from '../mocks/personas.js';
+import {
+  demoPersonas,
+  isDemoPersonaSwitcherEnabled,
+  prototypeDisclaimer,
+  type DemoPersona,
+  type DemoRuntimeEnvironment,
+} from '../mocks/personas.js';
 import { pageCatalog, type PageDefinition } from '../mocks/page-catalog.js';
-import { PlanDemoPage } from '../features/plan-demo/plan-demo-page.js';
 import { ReviewDetailPage } from '../features/review/review-detail-page.js';
 import { Phase3Page, type Phase3PageKind } from '../features/phase3/phase3-pages.js';
-import { AuthOnboardingPage, type AuthOnboardingKind } from '../features/auth-onboarding/auth-onboarding-pages.js';
+import { AuthOnboardingPage, defaultIdentityClient, pathForNextAction, type AuthOnboardingKind } from '../features/auth-onboarding/auth-onboarding-pages.js';
+import { IdentityError, type IdentityClient, type RestoredUserSession } from '../features/identity/identity-client.js';
+import { IdentityNextActionPage, IdentityRecoveryIssue, nextActionForIdentityPath } from '../features/identity/identity-next-action-page.js';
+import { createPlanClient, type PlanClient, type PlanSession } from '../features/plans-real/plan-client.js';
+import { RealPlanPage, type RealPlanPageKind } from '../features/plans-real/real-plan-page.js';
 import { resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -38,6 +47,17 @@ function getDefaultPersona(): DemoPersona {
 }
 
 const defaultPersona = getDefaultPersona();
+const runtimeDemoEnvironment: DemoRuntimeEnvironment = {
+  mode: import.meta.env.MODE,
+  dev: import.meta.env.DEV,
+  demoPersonaSwitcher: import.meta.env.VITE_DEMO_PERSONA_SWITCHER,
+};
+const defaultPlanClient = createPlanClient();
+const DevelopmentPersonaSwitcher = import.meta.env.DEV
+  ? React.lazy(() => import('./development-persona-switcher.js'))
+  : null;
+
+export type { DemoRuntimeEnvironment } from '../mocks/personas.js';
 
 function DemoNotice() {
   return (
@@ -48,63 +68,67 @@ function DemoNotice() {
   );
 }
 
-function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
-  const [personaId, setPersonaId] = useState(defaultPersona.id);
-  const persona = demoPersonas.find((item) => item.id === personaId) ?? defaultPersona;
+function DemoPersonaSwitcher({
+  compact = false,
+  enabled,
+  persona,
+  onChange,
+}: {
+  compact?: boolean;
+  enabled: boolean;
+  persona: DemoPersona;
+  onChange: (personaId: DemoPersona['id']) => void;
+}) {
+  if (!enabled || !DevelopmentPersonaSwitcher) return null;
 
   return (
-    <div className={compact ? 'persona persona--compact' : 'persona'}>
-      <div className="avatar" aria-hidden="true">{persona.name.slice(0, 1)}</div>
-      <div className="persona__copy">
-        <strong>{persona.name}</strong>
-        <span>{persona.goalLabel}</span>
-      </div>
-      <label className="sr-only" htmlFor={compact ? 'persona-web' : 'persona-h5'}>切换演示用户</label>
-      <select
-        id={compact ? 'persona-web' : 'persona-h5'}
-        aria-label="切换演示用户"
-        value={persona.id}
-        onChange={(event) => setPersonaId(event.target.value as typeof personaId)}
-      >
-        {demoPersonas.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
-      <span className={persona.planStatus === 'active' ? 'status status--success' : 'status status--warning'}>
-        {persona.planStatus === 'active' ? '执行中' : '待确认'}
-      </span>
-    </div>
+    <Suspense fallback={null}>
+      <DevelopmentPersonaSwitcher compact={compact} persona={persona} onChange={onChange} />
+    </Suspense>
   );
 }
 
-function H5Today() {
+function H5Today({ persona, showPersonaSwitcher, onPersonaChange }: {
+  persona: DemoPersona;
+  showPersonaSwitcher: boolean;
+  onPersonaChange: (personaId: DemoPersona['id']) => void;
+}) {
   return (
     <div className="today-page">
       <header className="mobile-header">
         <div>
-          <span className="eyebrow">7月23日 · 周三</span>
+          <span className="eyebrow">{persona.today.dateLabel}</span>
           <h1>今天，先完成最重要的事</h1>
         </div>
         <Link className="icon-button" aria-label="打开消息中心" to="/h5/messages"><Bell size={20} /></Link>
       </header>
 
       <DemoNotice />
-      <PersonaSwitcher />
+      <DemoPersonaSwitcher enabled={showPersonaSwitcher} persona={persona} onChange={onPersonaChange} />
 
       <section className="progress-band" aria-labelledby="weekly-progress">
         <div>
           <span className="eyebrow eyebrow--dark">本周进度</span>
           <h2 id="weekly-progress">稳定完成，比一次完美更重要</h2>
         </div>
-        <div className="progress-ring" aria-label="本周完成度 68%"><span>68%</span></div>
+        <div className="progress-ring" aria-label={`本周完成度 ${persona.completion}%`}><span>{persona.completion}%</span></div>
       </section>
 
       <section className="section-block" aria-labelledby="today-tasks">
         <div className="section-heading">
-          <div><span className="eyebrow">今日任务</span><h2 id="today-tasks">3 项待完成</h2></div>
-          <span className="quiet">约 46 分钟</span>
+          <div><span className="eyebrow">今日任务</span><h2 id="today-tasks">{persona.today.tasks.length} 项待完成</h2></div>
+          {persona.today.estimatedMinutes && <span className="quiet">{persona.today.estimatedMinutes}</span>}
         </div>
-        <TaskRow icon={<Utensils />} tone="lime" label="饮食记录" meta="完成三态打卡" action="去记录" to="/h5/records/diet" />
-        <TaskRow icon={<Dumbbell />} tone="blue" label="下肢基础训练" meta="5 个动作 · 约 40 分钟" action="开始" to="/h5/records/training-live" />
-        <TaskRow icon={<ClipboardCheck />} tone="amber" label="恢复感受" meta="训练后快速记录" action="待训练后" to="/h5/records" />
+        {persona.today.tasks.map((task) => <TaskRow
+          key={task.label}
+          icon={task.kind === 'meal' ? <Utensils /> : task.kind === 'training' ? <Dumbbell /> : <ClipboardCheck />}
+          tone={task.kind === 'meal' ? 'lime' : task.kind === 'training' ? 'blue' : 'amber'}
+          label={task.label}
+          meta={task.meta}
+          action={task.action}
+          to={task.to}
+        />)}
+        {!showPersonaSwitcher && <span className="status status--success">{persona.selectedPlanState === 'EFFECTIVE' ? '当前计划已生效' : '当前计划不可执行'}</span>}
       </section>
 
       <section className="insight-strip">
@@ -126,13 +150,22 @@ function TaskRow({ icon, tone, label, meta, action, to }: { icon: React.ReactNod
   );
 }
 
-function H5Shell({ page }: { page: PageDefinition }) {
+function H5Shell({ page, showPersonaSwitcher, planSession, planClient, identityClient, onSessionCreated }: {
+  page: PageDefinition;
+  showPersonaSwitcher: boolean;
+  planSession: PlanSession | null;
+  planClient: PlanClient;
+  identityClient: IdentityClient;
+  onSessionCreated: () => Promise<void>;
+}) {
   const isToday = page.id === 'H5-TOD-01';
+  const [personaId, setPersonaId] = useState(defaultPersona.id);
+  const persona = demoPersonas.find((item) => item.id === personaId) ?? defaultPersona;
 
   return (
     <div className="h5-viewport">
       <main className="h5-main">
-        {isToday ? <H5Today /> : authOnboardingKind(page) ? <AuthOnboardingPage kind={authOnboardingKind(page)!} /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : page.id === 'H5-PLN-01' ? <PlanDemoPage /> : <GenericPage page={page} />}
+        {isToday ? <H5Today persona={persona} showPersonaSwitcher={showPersonaSwitcher} onPersonaChange={setPersonaId} /> : authOnboardingKind(page) ? <AuthOnboardingPage kind={authOnboardingKind(page)!} identityClient={identityClient} onSessionCreated={onSessionCreated} /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : realPlanKind(page) ? <RealPlanPage kind={realPlanKind(page)!} session={planSession} client={planClient} /> : <GenericPage page={page} />}
       </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         <MobileNavItem to="/h5/today" label="今日" icon={<Home />} active={isToday} />
@@ -142,6 +175,13 @@ function H5Shell({ page }: { page: PageDefinition }) {
       </nav>
     </div>
   );
+}
+
+function realPlanKind(page: PageDefinition): RealPlanPageKind | undefined {
+  if (page.id === 'H5-PLN-01') return 'pending';
+  if (page.id === 'H5-PLN-02') return 'current';
+  if (page.id === 'H5-PLN-04') return 'history';
+  return undefined;
 }
 
 function authOnboardingKind(page: PageDefinition): AuthOnboardingKind | undefined {
@@ -175,10 +215,12 @@ const adminNav = [
 ];
 
 function WebWorkQueue() {
+  const fatLossPersona = demoPersonas.find((persona) => persona.goalType === 'FAT_LOSS') ?? defaultPersona;
+  const muscleGainPersona = demoPersonas.find((persona) => persona.goalType === 'MUSCLE_GAIN') ?? defaultPersona;
   const items = [
-    { level: '高优先级', type: '风险复核', user: '林晓雨', detail: '训练后反馈膝部不适，关联动作已暂停', time: '12 分钟前', tone: 'risk' },
-    { level: '临近截止', type: '计划发布', user: '周屿', detail: '双审核已通过，等待运营核对发布时间', time: '今天 15:20', tone: 'warning' },
-    { level: '普通', type: '饮食审核', user: '林晓雨', detail: '第 2 周演示计划饮食部分待复核', time: '今天 14:05', tone: 'info' },
+    { level: '高优先级', type: '风险复核', user: fatLossPersona.displayName, detail: '训练后反馈膝部不适，关联动作已暂停', time: '12 分钟前', tone: 'risk' },
+    { level: '临近截止', type: '计划发布', user: muscleGainPersona.displayName, detail: '双审核已通过，等待运营核对发布时间', time: '今天 15:20', tone: 'warning' },
+    { level: '普通', type: '饮食审核', user: fatLossPersona.displayName, detail: '第 2 周演示计划饮食部分待复核', time: '今天 14:05', tone: 'info' },
   ];
 
   return (
@@ -210,7 +252,9 @@ function Metric({ label, value, note, risk = false }: { label: string; value: st
   return <div className={risk ? 'metric metric--risk' : 'metric'}><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-function WebShell({ page }: { page: PageDefinition }) {
+function WebShell({ page, showPersonaSwitcher }: { page: PageDefinition; showPersonaSwitcher: boolean }) {
+  const [personaId, setPersonaId] = useState(defaultPersona.id);
+  const persona = demoPersonas.find((item) => item.id === personaId) ?? defaultPersona;
   const authKind = authOnboardingKind(page);
   const kind = phase3Kind(page);
   const content = authKind
@@ -220,9 +264,9 @@ function WebShell({ page }: { page: PageDefinition }) {
     : page.id === 'WEB-WQ-01'
     ? <WebWorkQueue />
     : page.id === 'WEB-REV-01'
-      ? <ReviewDetailPage kind="diet" />
+      ? <ReviewDetailPage kind="diet" persona={persona} />
       : page.id === 'WEB-REV-02'
-        ? <ReviewDetailPage kind="training" />
+        ? <ReviewDetailPage kind="training" persona={persona} />
         : <GenericPage page={page} />;
 
   return (
@@ -237,7 +281,7 @@ function WebShell({ page }: { page: PageDefinition }) {
         <div className="staff-profile"><span className="staff-avatar">运</span><span><strong>运营人员</strong><small>演示工作区</small></span><MoreHorizontal size={18} /></div>
       </aside>
       <div className="web-content">
-        <header className="web-topbar"><DemoNotice /><PersonaSwitcher compact /></header>
+        <header className="web-topbar"><DemoNotice /><DemoPersonaSwitcher compact enabled={showPersonaSwitcher} persona={persona} onChange={setPersonaId} /></header>
         <main>{content}</main>
       </div>
       <div className="unsupported-width" role="alert">当前宽度不支持处理后台任务，请将窗口调整到至少 1024px。</div>
@@ -274,11 +318,69 @@ function GenericPage({ page }: { page: PageDefinition }) {
   );
 }
 
-export function AppRoutes() {
+export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient };
+
+export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient }: AppRoutesProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const page = resolveRoute(location.pathname);
+  const detailVersion = planDetailVersion(location.pathname);
+  const [recoveryPending, setRecoveryPending] = useState(() => identityClient.hasStoredSession());
+  const [recoveryError, setRecoveryError] = useState<IdentityError>();
+  const [restoredSession, setRestoredSession] = useState<RestoredUserSession>();
+
+  async function restore() {
+    setRecoveryPending(identityClient.hasStoredSession());
+    setRecoveryError(undefined);
+    await identityClient.restoreSession().then((session) => {
+      if (session) {
+        setRestoredSession(session);
+        if (!location.pathname.startsWith('/h5/plans/')) {
+          navigate(pathForNextAction(session.nextAction), { replace: true });
+        }
+      }
+      setRecoveryPending(false);
+    }).catch((error: unknown) => {
+      if (error instanceof IdentityError && (error.status === 401 || error.status === 423)) {
+        navigate('/h5/login', { replace: true });
+        setRecoveryPending(false);
+        return;
+      }
+      setRecoveryPending(false);
+      setRecoveryError(error instanceof IdentityError ? error : new IdentityError('网络连接不可用，请检查连接后重试。', 0, 'NETWORK_ERROR'));
+    });
+  }
+
+  useEffect(() => {
+    void restore();
+  }, [identityClient]);
 
   if (location.pathname === '/') return <Navigate to="/h5/today" replace />;
+  if (recoveryPending) return <div className="h5-viewport"><main className="h5-main"><div className="generic-page generic-page--h5 identity-next-action" role="status">正在确认登录状态</div></main></div>;
+  if (recoveryError) return <div className="h5-viewport"><main className="h5-main"><IdentityRecoveryIssue
+    message={recoveryError.message}
+    {...(recoveryError.recoverableActions.includes('RETRY') ? { onRetry: restore } : {})}
+  /></main></div>;
+  const identityAction = nextActionForIdentityPath(location.pathname);
+  if (identityAction) return <div className="h5-viewport"><main className="h5-main"><IdentityNextActionPage nextAction={identityAction} /></main></div>;
+  if (location.pathname === '/h5/contact-operations') return <div className="h5-viewport"><main className="h5-main"><AuthOnboardingPage kind="contact-operations" identityClient={identityClient} /></main></div>;
+  if (detailVersion) {
+    const planSession = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
+    return <div className="h5-viewport"><main className="h5-main"><RealPlanPage kind="detail" planVersionId={detailVersion} session={planSession} client={planClient} /></main></div>;
+  }
   if (!page) return <div className="not-found"><AlertTriangle /><h1>页面不存在</h1><Link to="/h5/today">返回今日</Link></div>;
-  return page.surface === 'h5' ? <H5Shell page={page} /> : <WebShell page={page} />;
+  const showPersonaSwitcher = isDemoPersonaSwitcherEnabled(demoEnvironment);
+  const planSession = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
+  return page.surface === 'h5' ? <H5Shell page={page} showPersonaSwitcher={showPersonaSwitcher} planSession={planSession} planClient={planClient} identityClient={identityClient} onSessionCreated={restore} /> : <WebShell page={page} showPersonaSwitcher={showPersonaSwitcher} />;
+}
+
+function planDetailVersion(path: string): string | undefined {
+  const match = /^\/h5\/plans\/detail\/([^/]+)$/.exec(path);
+  if (!match) return undefined;
+  try {
+    const version = decodeURIComponent(match[1]!);
+    return version.trim() ? version : undefined;
+  } catch {
+    return undefined;
+  }
 }

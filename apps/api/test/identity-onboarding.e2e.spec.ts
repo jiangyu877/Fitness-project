@@ -3,7 +3,7 @@ import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildApplication } from '../src/application.js';
+import { buildApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 
@@ -25,6 +25,7 @@ const policy: AuthSecurityPolicy = {
   approved: true,
   passwordMinLength: 10,
   sessionTtlSeconds: 900,
+  passwordChangeTtlSeconds: 300,
   maxFailedAttempts: 3,
   mfaRequiredForStaff: false,
   scryptCost: 16_384,
@@ -32,13 +33,14 @@ const policy: AuthSecurityPolicy = {
   scryptParallelization: 1,
   scryptKeyLength: 32,
 };
+const profileFingerprintSecret = 'test-only-profile-idempotency-secret';
 
 describe('identity and onboarding API', () => {
   let app: INestApplication | undefined;
   afterEach(async () => app?.close());
 
   it('runs invited user, consent, profile, and qualified screening structure', async () => {
-    app = await buildApplication(environment, { authPolicy: policy });
+    app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
     await seedStaff(app, 'operations-1', 'OPERATIONS');
     await seedStaff(app, 'admin-1', 'SYSTEM_ADMIN');
     const agent = request(app.getHttpServer());
@@ -56,15 +58,18 @@ describe('identity and onboarding API', () => {
       }).expect(201);
     expect(invitation.body).toMatchObject({ businessStatus: 'ACCOUNT_INVITED', requestId: 'invite-user' });
 
-    await agent.post('/api/v1/identity/password/change')
+    const restricted = await agent.post('/api/v1/identity/sessions')
+      .set(headers('initial-login-user'))
+      .send({ loginIdentifier: 'invite-1', password: 'initial-pass-1', sessionKind: 'USER' })
+      .expect(201);
+    const changed = await agent.post('/api/v1/identity/password/change')
       .set(headers('password-user'))
+      .set('Authorization', `Bearer ${restricted.body.passwordChangeToken}`)
       .send({
-        accountId: 'user-1',
-        currentPassword: 'initial-pass-1',
         newPassword: 'changed-pass-1',
         expectedVersion: 1,
       }).expect(200);
-    const userToken = await login(agent, 'invite-1', 'USER', 'login-user', 'changed-pass-1');
+    const userToken = changed.body.sessionToken as string;
 
     const consent = await agent.post('/api/v1/onboarding/consents')
       .set(headers('consent-user')).set('Authorization', `Bearer ${userToken}`)
@@ -77,29 +82,12 @@ describe('identity and onboarding API', () => {
       .send({ expectedVersion: 0, data: { goalType: 'FAT_LOSS' } }).expect(200);
     expect(profile.body).toMatchObject({ businessStatus: 'PROFILE_DRAFT_SAVED', version: 1 });
 
-    await agent.post('/api/v1/identity/invitations')
-      .set(headers('invite-reviewer')).set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        accountId: 'reviewer-1',
-        loginIdentifier: 'reviewer-1',
-        accountType: 'STAFF',
-        roles: ['NUTRITION_REVIEWER'],
-        initialPassword: 'reviewer-pass-1',
-      }).expect(201);
-    await agent.post('/api/v1/identity/password/change')
-      .set(headers('password-reviewer'))
-      .send({
-        accountId: 'reviewer-1',
-        currentPassword: 'reviewer-pass-1',
-        newPassword: 'reviewer-pass-2',
-        expectedVersion: 1,
-        actingRole: 'NUTRITION_REVIEWER',
-      }).expect(200);
+    await seedStaff(app, 'reviewer-1', 'NUTRITION_REVIEWER');
     await app.get(DatabaseService).database.query(
       `UPDATE iam.account_role SET qualified_at=now()
        WHERE account_id='reviewer-1' AND role_code='NUTRITION_REVIEWER'`,
     );
-    const reviewerToken = await login(agent, 'reviewer-1', 'STAFF', 'login-reviewer', 'reviewer-pass-2', 'NUTRITION_REVIEWER');
+    const reviewerToken = await login(agent, 'reviewer-1', 'STAFF', 'login-reviewer', 'seed-password-1', 'NUTRITION_REVIEWER');
     const screening = await agent.post('/api/v1/onboarding/screening-results')
       .set(headers('screening-user')).set('Authorization', `Bearer ${reviewerToken}`)
       .send({

@@ -4,10 +4,11 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 
-import { buildApplication } from '../src/application.js';
+import { buildApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import type { MfaVerifier } from '../src/identity/mfa-verifier.js';
+import { createOpenApiDocument } from '../src/openapi.js';
 
 const environment: Environment = {
   nodeEnv: 'test',
@@ -27,6 +28,7 @@ const policy: AuthSecurityPolicy = {
   approved: true,
   passwordMinLength: 10,
   sessionTtlSeconds: 900,
+  passwordChangeTtlSeconds: 300,
   maxFailedAttempts: 3,
   mfaRequiredForStaff: false,
   scryptCost: 16_384,
@@ -34,11 +36,79 @@ const policy: AuthSecurityPolicy = {
   scryptParallelization: 1,
   scryptKeyLength: 32,
 };
+const profileFingerprintSecret = 'test-only-profile-idempotency-secret';
 
 describe('identity security hardening', () => {
   let app: INestApplication | undefined;
 
   afterEach(async () => app?.close());
+
+  it('validates real login and security-error responses against their OpenAPI schemas', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedAccount(app, 'schema-restricted', 'USER', 'INVITED', true);
+    await seedActiveUser(app, 'schema-user');
+    await seedActiveStaff(app, 'schema-staff', 'SYSTEM_ADMIN');
+    const agent = request(app.getHttpServer());
+    const operation = createOpenApiDocument(app).paths['/api/v1/identity/sessions']?.post;
+    const successSchema = responseSchema(operation, '201') as LocalSchema;
+    const branches = successSchema.oneOf ?? [];
+
+    const restricted = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-restricted')).send({
+        loginIdentifier: 'schema-restricted', password: 'seed-password-1', sessionKind: 'USER',
+      }).expect(201);
+    const user = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-user')).send({
+        loginIdentifier: 'schema-user', password: 'seed-password-1', sessionKind: 'USER',
+      }).expect(201);
+    const staff = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-staff')).send({
+        loginIdentifier: 'schema-staff', password: 'seed-password-1', sessionKind: 'STAFF', actingRole: 'SYSTEM_ADMIN',
+      }).expect(201);
+
+    for (const response of [restricted.body, user.body, staff.body]) {
+      expect(branches.filter((branch) => matchesLocalSchema(response, branch))).toHaveLength(1);
+    }
+    expect(restricted.body.sessionType).toBe('PASSWORD_CHANGE');
+    expect(user.body.sessionType).toBe('USER');
+    expect(staff.body.sessionType).toBe('STAFF');
+
+    const unauthorized = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-401')).send({
+        loginIdentifier: 'schema-user', password: 'wrong-password', sessionKind: 'USER',
+      }).expect(401);
+    expect(matchesLocalSchema(unauthorized.body, responseSchema(operation, '401') as LocalSchema)).toBe(true);
+    expect(unauthorized.body).toMatchObject({ errorCode: 'INVALID_CREDENTIALS', requestId: 'schema-401' });
+
+    await app.close();
+    app = undefined;
+    app = await buildApplication(environment);
+    const unavailable = await request(app.getHttpServer()).post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-503')).send({
+        loginIdentifier: 'schema-user', password: 'seed-password-1', sessionKind: 'USER',
+      }).expect(503);
+    const unavailableSchema = responseSchema(operation, '503') as LocalSchema;
+    expect(
+      matchesLocalSchema(unavailable.body, unavailableSchema),
+      JSON.stringify({ body: unavailable.body, schema: unavailableSchema }),
+    ).toBe(true);
+    expect(unavailable.body).toMatchObject({ errorCode: 'AUTH_SECURITY_POLICY_UNAPPROVED', requestId: 'schema-503' });
+
+    await app.close();
+    app = undefined;
+    app = await buildApplication(environment, {
+      authPolicy: { ...policy, passwordChangeTtlSeconds: policy.sessionTtlSeconds },
+    });
+    await seedAccount(app, 'schema-invalid-ttl', 'USER', 'INVITED', true);
+    const invalidTtl = await request(app.getHttpServer()).post('/api/v1/identity/sessions')
+      .set(writeHeaders('schema-invalid-ttl')).send({
+        loginIdentifier: 'schema-invalid-ttl', password: 'seed-password-1', sessionKind: 'USER',
+      }).expect(503);
+    expect(matchesLocalSchema(invalidTtl.body, unavailableSchema)).toBe(true);
+    expect(invalidTtl.body).toMatchObject({
+      errorCode: 'PASSWORD_CHANGE_TTL_POLICY_INVALID', requestId: 'schema-invalid-ttl',
+    });
+  }, 10_000);
 
   it('requires a staff bearer session for invitations and leaves no anonymous side effect', async () => {
     app = await buildApplication(environment, { authPolicy: policy });
@@ -151,7 +221,7 @@ describe('identity security hardening', () => {
   });
 
   it('rejects idempotency-key reuse across route, principal, and payload scopes', async () => {
-    app = await buildApplication(environment, { authPolicy: policy });
+    app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
     await seedActiveUser(app, 'scope-user-1');
     await seedActiveUser(app, 'scope-user-2');
     const agent = request(app.getHttpServer());
@@ -254,21 +324,118 @@ describe('identity security hardening', () => {
       .send({ consentVersion: 'consent-v1' }).expect(401);
   });
 
-  it('never activates a locked or disabled account through initial password change', async () => {
+  it('audits locked and disabled fresh-login rejections with a stable request identifier', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedAccount(app, 'fresh-login-locked', 'USER', 'LOCKED', false);
+    await seedAccount(app, 'fresh-login-disabled', 'USER', 'DISABLED', false);
+    const agent = request(app.getHttpServer());
+
+    for (const [accountId, requestId, auditCode] of [
+      ['fresh-login-locked', 'fresh-login-locked-request', 'ACCOUNT_LOCKED'],
+      ['fresh-login-disabled', 'fresh-login-disabled-request', 'ACCOUNT_DISABLED'],
+    ] as const) {
+      await agent.post('/api/v1/identity/sessions')
+        .set(writeHeaders(requestId))
+        .send({ loginIdentifier: accountId, password: 'seed-password-1', sessionKind: 'USER' })
+        .expect(401)
+        .expect(({ body }) => expect(body).toMatchObject({
+          errorCode: 'INVALID_CREDENTIALS',
+          requestId,
+        }));
+      expect(await rejectionAudit(app, requestId)).toEqual([{
+        actor_id: null,
+        actor_role: 'SYSTEM',
+        error_code: auditCode,
+      }]);
+    }
+  });
+
+  it('fails closed for an established session when authentication-policy approval is withdrawn', async () => {
+    const runtimeEnvironment = { ...environment };
+    app = await buildApplication(runtimeEnvironment, { authPolicy: policy });
+    await seedActiveUser(app, 'policy-session-user');
+    const agent = request(app.getHttpServer());
+    const token = await userLogin(agent, 'policy-session-user', 'policy-session-login');
+    runtimeEnvironment.authSecurityPolicyApproved = false;
+
+    await agent.post('/api/v1/onboarding/consents')
+      .set(writeHeaders('policy-session-write')).set('Authorization', `Bearer ${token}`)
+      .send({ consentVersion: 'consent-v1' })
+      .expect(503)
+      .expect(({ body }) => expect(body).toMatchObject({
+        errorCode: 'AUTH_SECURITY_POLICY_UNAPPROVED',
+        requestId: 'policy-session-write',
+      }));
+  });
+
+  it('audits invalid and locked bearer rejections with stable request identifiers', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveUser(app, 'session-audit-user');
+    const agent = request(app.getHttpServer());
+
+    await agent.post('/api/v1/onboarding/consents')
+      .set(writeHeaders('invalid-bearer-write')).set('Authorization', 'Bearer invalid-session-token')
+      .send({ consentVersion: 'consent-v1' })
+      .expect(401)
+      .expect(({ body }) => expect(body).toMatchObject({
+        errorCode: 'SESSION_INVALID',
+        requestId: 'invalid-bearer-write',
+      }));
+    expect(await rejectionAudit(app, 'invalid-bearer-write')).toEqual([{
+      actor_id: null,
+      actor_role: 'SYSTEM',
+      error_code: 'SESSION_INVALID',
+    }]);
+
+    const token = await userLogin(agent, 'session-audit-user', 'session-audit-login');
+    await app.get(DatabaseService).database.query(
+      `UPDATE iam.account SET status='LOCKED' WHERE id='session-audit-user'`,
+    );
+    await agent.post('/api/v1/onboarding/consents')
+      .set(writeHeaders('locked-bearer-write')).set('Authorization', `Bearer ${token}`)
+      .send({ consentVersion: 'consent-v1' })
+      .expect(401)
+      .expect(({ body }) => expect(body).toMatchObject({
+        errorCode: 'SESSION_INVALID',
+        requestId: 'locked-bearer-write',
+      }));
+    expect(await rejectionAudit(app, 'locked-bearer-write')).toEqual([{
+      actor_id: 'session-audit-user',
+      actor_role: 'USER',
+      error_code: 'SESSION_INVALID',
+    }]);
+  });
+
+  it('pins the validated policy so later caller mutation cannot change session authorization', async () => {
+    const runtimePolicy = { ...policy, mfaRequiredForStaff: false };
+    app = await buildApplication(environment, { authPolicy: runtimePolicy });
+    await seedActiveStaff(app, 'mfa-upgrade-operations', 'OPERATIONS');
+    const agent = request(app.getHttpServer());
+    const token = await login(agent, 'mfa-upgrade-operations', 'seed-password-1', 'OPERATIONS');
+    runtimePolicy.mfaRequiredForStaff = true;
+
+    await agent.post('/api/v1/identity/invitations')
+      .set(writeHeaders('mfa-upgrade-write')).set('Authorization', `Bearer ${token}`)
+      .send(userInvitation('mfa-upgrade-target'))
+      .expect(201);
+    expect(await accountCount(app, 'mfa-upgrade-target')).toBe(1);
+    expect(await rejectionAudit(app, 'mfa-upgrade-write')).toEqual([]);
+  });
+
+  it('never creates a restricted password-change context for locked or disabled accounts', async () => {
     app = await buildApplication(environment, { authPolicy: policy });
     for (const status of ['LOCKED', 'DISABLED'] as const) {
       const accountId = `${status.toLowerCase()}-invite`;
       await seedAccount(app, accountId, 'USER', status, true);
-      await request(app.getHttpServer()).post('/api/v1/identity/password/change')
+      await request(app.getHttpServer()).post('/api/v1/identity/sessions')
         .set(writeHeaders(`change-${status}`))
         .send({
-          accountId,
-          currentPassword: 'seed-password-1',
-          newPassword: 'changed-password-1',
-          expectedVersion: 1,
+          loginIdentifier: accountId,
+          password: 'seed-password-1',
+          sessionKind: 'USER',
         })
-        .expect(409)
-        .expect(({ body }) => expect(body.errorCode).toBe('INITIAL_PASSWORD_CHANGE_NOT_ALLOWED'));
+        .expect(401)
+        .expect(({ body }) => expect(body.errorCode).toBe('INVALID_CREDENTIALS'));
     }
 
     const statuses = await app.get(DatabaseService).database.query<{ status: string }>(
@@ -276,8 +443,46 @@ describe('identity security hardening', () => {
        WHERE id IN ('locked-invite', 'disabled-invite') ORDER BY status`,
     );
     expect(statuses.rows.map((row) => row.status).sort()).toEqual(['DISABLED', 'LOCKED']);
-    expect(await rejectedAuditCount(app, 'change-LOCKED', 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED')).toBe(1);
-    expect(await rejectedAuditCount(app, 'change-DISABLED', 'INITIAL_PASSWORD_CHANGE_NOT_ALLOWED')).toBe(1);
+    expect(await rejectedAuditCount(app, 'change-LOCKED', 'ACCOUNT_LOCKED')).toBe(1);
+    expect(await rejectedAuditCount(app, 'change-DISABLED', 'ACCOUNT_DISABLED')).toBe(1);
+  });
+
+  it('counts incorrect invited-login credentials, locks at the threshold, and audits every rejection', async () => {
+    app = await buildApplication(environment, {
+      authPolicy: { ...policy, maxFailedAttempts: 2 },
+    });
+    await seedAccount(app, 'initial-password-lock-user', 'USER', 'INVITED', true);
+    const agent = request(app.getHttpServer());
+
+    for (const requestId of ['initial-password-failure-1', 'initial-password-failure-2']) {
+      await agent.post('/api/v1/identity/sessions')
+        .set(writeHeaders(requestId))
+        .send({
+          loginIdentifier: 'initial-password-lock-user',
+          password: 'wrong-initial-password',
+          sessionKind: 'USER',
+        })
+        .expect(401)
+        .expect(({ body }) => {
+          expect(body).toMatchObject({ errorCode: 'INVALID_CREDENTIALS', requestId });
+        });
+    }
+
+    const account = await app.get(DatabaseService).database.query<{
+      status: string;
+      failed_attempts: number;
+    }>('SELECT status, failed_attempts FROM iam.account WHERE id=$1', ['initial-password-lock-user']);
+    expect(account.rows[0]).toEqual({ status: 'LOCKED', failed_attempts: 2 });
+    expect(await rejectionAudit(app, 'initial-password-failure-1')).toEqual([{
+      actor_id: null,
+      actor_role: 'SYSTEM',
+      error_code: 'INVALID_CREDENTIALS',
+    }]);
+    expect(await rejectionAudit(app, 'initial-password-failure-2')).toEqual([{
+      actor_id: null,
+      actor_role: 'SYSTEM',
+      error_code: 'ACCOUNT_LOCKED',
+    }]);
   });
 
   it('writes audit actors from the verified session instead of forged headers', async () => {
@@ -339,6 +544,40 @@ describe('identity security hardening', () => {
       .set(writeHeaders('screening-qualified')).set('Authorization', `Bearer ${token}`)
       .send(screening).expect(201);
     expect(await screeningCount(app, 'screening-user')).toBe(1);
+  });
+
+  it('rejects a STAFF screening target and writes a structured rejection audit', async () => {
+    app = await buildApplication(environment, { authPolicy: policy });
+    await seedActiveStaff(app, 'screening-target-staff', 'OPERATIONS');
+    await seedActiveStaff(app, 'qualified-reviewer', 'NUTRITION_REVIEWER');
+    await app.get(DatabaseService).database.query(
+      `UPDATE iam.account_role SET qualified_at=now()
+       WHERE account_id='qualified-reviewer' AND role_code='NUTRITION_REVIEWER'`,
+    );
+    const agent = request(app.getHttpServer());
+    const token = await login(agent, 'qualified-reviewer', 'seed-password-1', 'NUTRITION_REVIEWER');
+
+    const rejected = await agent.post('/api/v1/onboarding/screening-results')
+      .set(writeHeaders('screening-staff-target')).set('Authorization', `Bearer ${token}`)
+      .send({
+        userId: 'screening-target-staff',
+        conclusion: 'HUMAN_REVIEW',
+        source: 'MANUAL_REVIEW',
+        ruleVersion: null,
+      })
+      .expect(403)
+      .expect(({ body }) => expect(body).toMatchObject({
+        errorCode: 'SCREENING_TARGET_USER_REQUIRED', requestId: 'screening-staff-target',
+      }));
+    const screeningOperation = createOpenApiDocument(app).paths['/api/v1/onboarding/screening-results']?.post;
+    expect(matchesLocalSchema(rejected.body, responseSchema(screeningOperation, '403') as LocalSchema)).toBe(true);
+
+    expect(await screeningCount(app, 'screening-target-staff')).toBe(0);
+    expect(await rejectionAudit(app, 'screening-staff-target')).toEqual([{
+      actor_id: 'qualified-reviewer',
+      actor_role: 'NUTRITION_REVIEWER',
+      error_code: 'SCREENING_TARGET_USER_REQUIRED',
+    }]);
   });
 
   it('binds a verified acting role to each multi-role staff session', async () => {
@@ -449,26 +688,25 @@ describe('identity security hardening', () => {
     expect(await accountCount(app, 'fingerprint-user')).toBe(1);
   });
 
-  it('replays and serializes initial password change by safe idempotency scope', async () => {
+  it('consumes an initial-password context once under concurrent requests', async () => {
     app = await buildApplication(environment, { authPolicy: policy });
     await seedAccount(app, 'retry-invited', 'USER', 'INVITED', true);
     const agent = request(app.getHttpServer());
-    const body = {
-      accountId: 'retry-invited',
-      currentPassword: 'seed-password-1',
-      newPassword: 'changed-password-1',
-      expectedVersion: 1,
-    };
+    const restricted = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('retry-login'))
+      .send({ loginIdentifier: 'retry-invited', password: 'seed-password-1', sessionKind: 'USER' })
+      .expect(201);
+    const body = { newPassword: 'changed-password-1', expectedVersion: 1 };
     const send = () => agent.post('/api/v1/identity/password/change')
-      .set(writeHeaders('retry-password')).send(body);
+      .set(writeHeaders('retry-password')).set('Authorization', `Bearer ${restricted.body.passwordChangeToken}`).send(body);
 
     const concurrent = await Promise.all([send(), send()]);
-    expect(concurrent.map((response) => response.status)).toEqual([200, 200]);
-    const replay = await agent.post('/api/v1/identity/password/change')
-      .set(writeHeaders('retry-password'))
-      .send({ ...body, currentPassword: 'wrong-old-secret', newPassword: 'other-new-secret' })
-      .expect(200);
-    expect(replay.body).toMatchObject({ businessStatus: 'PASSWORD_CHANGED', version: 2 });
+    expect(concurrent.map((response) => response.status).sort()).toEqual([200, 401]);
+    await agent.post('/api/v1/identity/password/change')
+      .set(writeHeaders('retry-replay')).set('Authorization', `Bearer ${restricted.body.passwordChangeToken}`)
+      .send(body)
+      .expect(401)
+      .expect(({ body: response }) => expect(response.errorCode).toBe('PASSWORD_CHANGE_TOKEN_INVALID'));
 
     const database = app.get(DatabaseService).database;
     const counts = await database.query<{ version: number; audits: number }>(`
@@ -517,11 +755,14 @@ describe('identity security hardening', () => {
       })
       .expect(201);
 
+    const restricted = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('safe-change-login'))
+      .send({ loginIdentifier: 'safe-change-user', password: 'seed-password-1', sessionKind: 'USER' })
+      .expect(201);
     await agent.post('/api/v1/identity/password/change')
       .set(writeHeaders('safe-change-key'))
+      .set('Authorization', `Bearer ${restricted.body.passwordChangeToken}`)
       .send({
-        accountId: 'safe-change-user',
-        currentPassword: 'seed-password-1',
         newPassword: 'changed-password-1',
         expectedVersion: 1,
       })
@@ -543,9 +784,7 @@ describe('identity security hardening', () => {
       actingRole: 'USER',
     }));
     expect(stored.get('safe-change-key')).toBe(digest({
-      accountId: 'safe-change-user',
       expectedVersion: 1,
-      actingRole: 'USER',
     }));
     for (const forbidden of [
       'seed-password-1',
@@ -556,16 +795,81 @@ describe('identity security hardening', () => {
     }
   });
 
+  it('uses only the explicit profile idempotency projection, never arbitrary profile values', async () => {
+    app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
+    await seedActiveUser(app, 'profile-fingerprint-user');
+    const agent = request(app.getHttpServer());
+    const token = await userLogin(agent, 'profile-fingerprint-user', 'profile-fingerprint-login');
+    const sensitiveValue = 'sensitive-profile-value-must-not-be-fingerprinted';
+
+    await agent.put('/api/v1/onboarding/profile/steps/basics')
+      .set(writeHeaders('profile-fingerprint-save')).set('Authorization', `Bearer ${token}`)
+      .send({
+        expectedVersion: 0,
+        data: { arbitrarySensitiveField: sensitiveValue },
+      })
+      .expect(200);
+
+    const row = await app.get(DatabaseService).database.query<{ request_fingerprint: string }>(
+      `SELECT request_fingerprint FROM audit.idempotency_key WHERE key='profile-fingerprint-save'`,
+    );
+    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
+      step: 'basics',
+      expectedVersion: 0,
+    })));
+    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
+      step: 'basics',
+      expectedVersion: 0,
+      data: { arbitrarySensitiveField: sensitiveValue },
+    })));
+    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(sensitiveValue));
+  });
+
+  it('rejects profile idempotency reuse for different data without persisting profile values in the fingerprint', async () => {
+    app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
+    await seedActiveUser(app, 'profile-conflict-user');
+    const agent = request(app.getHttpServer());
+    const token = await userLogin(agent, 'profile-conflict-user', 'profile-conflict-login');
+    const firstData = { healthValue: 'low-entropy-sensitive-value-a' };
+    const changedData = { healthValue: 'low-entropy-sensitive-value-b' };
+
+    await agent.put('/api/v1/onboarding/profile/steps/basics')
+      .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
+      .send({ expectedVersion: 0, data: firstData })
+      .expect(200);
+    await agent.put('/api/v1/onboarding/profile/steps/basics')
+      .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
+      .send({ expectedVersion: 0, data: firstData })
+      .expect(200);
+    await agent.put('/api/v1/onboarding/profile/steps/basics')
+      .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
+      .send({ expectedVersion: 0, data: changedData })
+      .expect(409)
+      .expect(({ body }) => expect(body.errorCode).toBe('IDEMPOTENCY_KEY_REUSED'));
+
+    const stored = await app.get(DatabaseService).database.query<{ request_fingerprint: string }>(
+      `SELECT request_fingerprint FROM audit.idempotency_key WHERE key='profile-conflict-save'`,
+    );
+    expect(stored.rows[0]?.request_fingerprint).not.toContain(firstData.healthValue);
+    expect(stored.rows[0]?.request_fingerprint).not.toContain(changedData.healthValue);
+    expect(stored.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
+      step: 'basics', expectedVersion: 0, data: firstData,
+    })));
+  });
+
   it('audits an initial password version conflict without retaining idempotency state', async () => {
     app = await buildApplication(environment, { authPolicy: policy });
     await seedAccount(app, 'version-conflict-user', 'USER', 'INVITED', true);
     const agent = request(app.getHttpServer());
+    const restricted = await agent.post('/api/v1/identity/sessions')
+      .set(writeHeaders('version-conflict-login'))
+      .send({ loginIdentifier: 'version-conflict-user', password: 'seed-password-1', sessionKind: 'USER' })
+      .expect(201);
 
     await agent.post('/api/v1/identity/password/change')
       .set(writeHeaders('password-version-conflict'))
+      .set('Authorization', `Bearer ${restricted.body.passwordChangeToken}`)
       .send({
-        accountId: 'version-conflict-user',
-        currentPassword: 'seed-password-1',
         newPassword: 'changed-password-1',
         expectedVersion: 2,
       })
@@ -673,7 +977,7 @@ describe('identity security hardening', () => {
     expect(await sessionCount(app, 'acting-role-staff')).toBe(0);
   });
 
-  it('audits staff initial-password role rejection only after credential verification', async () => {
+  it('does not issue a user password-change context to invited staff accounts', async () => {
     app = await buildApplication(environment, { authPolicy: policy });
     await seedAccount(app, 'change-role-staff', 'STAFF', 'INVITED', true);
     await app.get(DatabaseService).database.query(
@@ -682,33 +986,16 @@ describe('identity security hardening', () => {
     );
     const agent = request(app.getHttpServer());
 
-    await agent.post('/api/v1/identity/password/change')
+    await agent.post('/api/v1/identity/sessions')
       .set(writeHeaders('change-role-missing'))
       .send({
-        accountId: 'change-role-staff',
-        currentPassword: 'seed-password-1',
-        newPassword: 'changed-password-1',
-        expectedVersion: 1,
-      })
-      .expect(403);
-    expect(await rejectionAudit(app, 'change-role-missing')).toEqual([{
-      actor_id: 'change-role-staff',
-      actor_role: 'SYSTEM',
-      error_code: 'ROLE_NOT_AUTHORIZED',
-    }]);
-
-    await agent.post('/api/v1/identity/password/change')
-      .set(writeHeaders('change-role-wrong-password'))
-      .send({
-        accountId: 'change-role-staff',
-        currentPassword: 'wrong-password-1',
-        newPassword: 'changed-password-1',
-        expectedVersion: 1,
-        actingRole: 'SYSTEM_ADMIN',
+        loginIdentifier: 'change-role-staff',
+        password: 'seed-password-1',
+        sessionKind: 'STAFF',
       })
       .expect(401)
       .expect(({ body }) => expect(body.errorCode).toBe('INVALID_CREDENTIALS'));
-    expect(await rejectionAudit(app, 'change-role-wrong-password')).toEqual([]);
+    expect(await sessionCount(app, 'change-role-staff')).toBe(0);
   });
 });
 
@@ -869,6 +1156,40 @@ async function rejectedAuditCount(
     [requestId, errorCode],
   );
   return result.rows[0]?.count ?? 0;
+}
+
+type LocalSchema = {
+  type?: string;
+  required?: string[];
+  properties?: Record<string, LocalSchema>;
+  enum?: unknown[];
+  const?: unknown;
+  items?: LocalSchema;
+  additionalProperties?: boolean;
+  oneOf?: LocalSchema[];
+};
+
+function responseSchema(operation: any, status: string): unknown {
+  return operation?.responses?.[status]?.content?.['application/json']?.schema;
+}
+
+function matchesLocalSchema(value: unknown, schema: LocalSchema): boolean {
+  if (schema.oneOf && schema.oneOf.filter((branch) => matchesLocalSchema(value, branch)).length !== 1) return false;
+  if (schema.const !== undefined && value !== schema.const) return false;
+  if (schema.enum && !schema.enum.some((item) => item === value)) return false;
+  if (schema.type === 'string') return typeof value === 'string';
+  if (schema.type === 'integer') return typeof value === 'number' && Number.isInteger(value);
+  if (schema.type === 'array') {
+    return Array.isArray(value) && (!schema.items || value.every((item) => matchesLocalSchema(item, schema.items!)));
+  }
+  if (schema.type === 'object') {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    if (schema.required?.some((key) => !(key in record))) return false;
+    if (schema.additionalProperties === false && Object.keys(record).some((key) => !(key in (schema.properties ?? {})))) return false;
+    return Object.entries(schema.properties ?? {}).every(([key, child]) => !(key in record) || matchesLocalSchema(record[key], child));
+  }
+  return true;
 }
 
 async function rejectionAudit(target: INestApplication, requestId: string) {

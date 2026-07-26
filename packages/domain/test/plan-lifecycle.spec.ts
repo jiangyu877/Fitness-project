@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canGeneratePlanTasks,
   calculateConfirmationDeadline,
   canCreatePendingVersion,
   createDraftPlan,
@@ -21,7 +22,7 @@ describe('plan lifecycle', () => {
   });
 
   it('requires two professional approvals before publication', () => {
-    let plan = createDraftPlan('plan-v1', 'user-1', effectiveAt);
+    let plan = createDraftPlan('plan-v1', 'user-1', effectiveAt, new Date('2026-08-27T00:00:00.000Z'));
     plan = transitionPlan(plan, { type: 'SUBMIT_REVIEW' });
     plan = transitionPlan(plan, { type: 'APPROVE_DIET', actorId: 'nutrition-1' });
 
@@ -151,6 +152,7 @@ describe('plan lifecycle', () => {
     const current = {
       userId: 'user-1',
       status: 'ACTIVE' as const,
+      effectiveAt: new Date('2026-07-20T00:00:00.000Z'),
       effectiveTo: new Date('2026-07-27T00:00:00.000Z'),
     };
 
@@ -159,11 +161,64 @@ describe('plan lifecycle', () => {
       plan: null,
     });
   });
+
+  it('treats only one active version inside its trusted effective window as current', () => {
+    const future = activePlan('future', new Date('2026-07-28T00:00:00.000Z'), new Date('2026-08-01T00:00:00.000Z'));
+    const current = activePlan('current', new Date('2026-07-26T00:00:00.000Z'), new Date('2026-07-28T00:00:00.000Z'));
+
+    expect(resolveCurrentPlan([future], 'user-1', effectiveAt)).toEqual({ status: 'PLAN_GAP', plan: null });
+    expect(resolveCurrentPlan([current], 'user-1', effectiveAt)).toEqual({ status: 'ACTIVE', plan: current });
+    expect(resolveCurrentPlan([current, { ...current, id: 'duplicate' }], 'user-1', effectiveAt)).toEqual({
+      status: 'PLAN_STATE_INVALID',
+      plan: null,
+    });
+  });
+
+  it('allows task generation only for one active version inside its trusted window', () => {
+    const current = activePlan('current', new Date('2026-07-26T00:00:00.000Z'), new Date('2026-07-28T00:00:00.000Z'));
+
+    expect(canGeneratePlanTasks([current], 'user-1', effectiveAt)).toBe(true);
+    expect(canGeneratePlanTasks([{ ...current, status: 'SCHEDULED' }], 'user-1', effectiveAt)).toBe(false);
+    expect(canGeneratePlanTasks([{ ...current, effectiveAt: new Date('2026-07-28T00:00:00.000Z') }], 'user-1', effectiveAt)).toBe(false);
+    expect(canGeneratePlanTasks([current, { ...current, id: 'duplicate' }], 'user-1', effectiveAt)).toBe(false);
+  });
+
+  it('requires a finite effective end after review before publication', () => {
+    expect(() => transitionPlan(publishablePlan(null), { type: 'PUBLISH', occurredAt: publishAt })).toThrow(
+      /EFFECTIVE_TO_REQUIRED/,
+    );
+    const invalid = publishablePlan(new Date('2026-07-27T00:00:00.000Z'));
+    expect(() => transitionPlan(invalid, { type: 'PUBLISH', occurredAt: publishAt })).toThrow(
+      /INVALID_EFFECTIVE_WINDOW/,
+    );
+  });
+
+  it('PL10 keeps the unexpired active plan current when a replacement is rejected or timed out', () => {
+    const current = activePlan('current', new Date('2026-07-20T00:00:00.000Z'), new Date('2026-07-28T00:00:00.000Z'));
+    const candidates = [
+      { ...current, id: 'rejected', status: 'USER_REVISION_REQUIRED' as const },
+      { ...current, id: 'timed-out', status: 'CONFIRMATION_TIMED_OUT' as const },
+    ];
+
+    expect(resolveCurrentPlan([current], 'user-1', effectiveAt)).toEqual({ status: 'ACTIVE', plan: current });
+    expect(canGeneratePlanTasks([current, ...candidates], 'user-1', effectiveAt)).toBe(true);
+  });
+
+  it('PL11 returns a gap and no task eligibility after the old plan expires without replacement', () => {
+    const expired = activePlan('expired', new Date('2026-07-20T00:00:00.000Z'), effectiveAt);
+
+    expect(resolveCurrentPlan([expired], 'user-1', effectiveAt)).toEqual({ status: 'PLAN_GAP', plan: null });
+    expect(canGeneratePlanTasks([expired], 'user-1', effectiveAt)).toBe(false);
+  });
 });
 
-function publishablePlan() {
-  let plan = createDraftPlan('plan-v1', 'user-1', effectiveAt);
+function publishablePlan(effectiveTo: Date | null = new Date('2026-08-27T00:00:00.000Z')) {
+  let plan = createDraftPlan('plan-v1', 'user-1', effectiveAt, effectiveTo);
   plan = transitionPlan(plan, { type: 'SUBMIT_REVIEW' });
   plan = transitionPlan(plan, { type: 'APPROVE_DIET', actorId: 'nutrition-1' });
   return transitionPlan(plan, { type: 'APPROVE_TRAINING', actorId: 'trainer-1' });
+}
+
+function activePlan(id: string, startsAt: Date, endsAt: Date) {
+  return { id, userId: 'user-1', status: 'ACTIVE' as const, effectiveAt: startsAt, effectiveTo: endsAt };
 }

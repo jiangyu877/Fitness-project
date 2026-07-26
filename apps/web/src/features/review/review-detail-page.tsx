@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, RotateCcw, ShieldX } from 'lucide-react';
 import { useState } from 'react';
 
-import { prototypeDisclaimer } from '../../mocks/personas.js';
+import { prototypeDisclaimer, type DemoPersona } from '../../mocks/personas.js';
 
 export type ReviewKind = 'diet' | 'training';
 
@@ -24,7 +24,7 @@ const reviewCopy = {
   },
 } as const;
 
-export function ReviewDetailPage({ kind }: { kind: ReviewKind }) {
+export function ReviewDetailPage({ kind, persona }: { kind: ReviewKind; persona: DemoPersona }) {
   const copy = reviewCopy[kind];
   const [comment, setComment] = useState('');
   const [result, setResult] = useState<'approved' | 'returned'>();
@@ -39,7 +39,7 @@ export function ReviewDetailPage({ kind }: { kind: ReviewKind }) {
         <div>
           <span className="eyebrow">计划审核 · 待处理</span>
           <h1>{copy.title}</h1>
-          <p>林晓雨 · 计划版本 V2</p>
+          <p>{persona.displayName} · 计划版本 {persona.planVersion}</p>
         </div>
         <span className="status status--warning">等待{copy.section}审核</span>
       </header>
@@ -59,10 +59,10 @@ export function ReviewDetailPage({ kind }: { kind: ReviewKind }) {
             <div><span className="eyebrow">审阅对象</span><h2 id="review-facts-title">{copy.fact}</h2></div>
           </div>
           <dl className="fact-list">
-            <div><dt>用户</dt><dd>林晓雨</dd></div>
-            <div><dt>目标</dt><dd>减脂与生活节奏稳定</dd></div>
-            <div><dt>版本</dt><dd>计划版本 V2</dd></div>
-            <div><dt>事实摘要</dt><dd>{copy.summary}</dd></div>
+            <div><dt>用户</dt><dd>{persona.displayName}</dd></div>
+            <div><dt>目标</dt><dd>{persona.goalSummary}</dd></div>
+            <div><dt>版本</dt><dd>计划版本 {persona.planVersion}</dd></div>
+            <div><dt>事实摘要</dt><dd>{kind === 'training' ? `每周 ${persona.trainingDaysPerWeek} 次训练、动作记录要求与关联任务暂停边界。` : copy.summary}</dd></div>
           </dl>
           <div className="review-boundary">
             <ShieldX aria-hidden="true" />

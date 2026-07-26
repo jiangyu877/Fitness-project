@@ -120,6 +120,12 @@ export function transitionPlan(plan: PlanVersion, event: PlanEvent): PlanVersion
         throw new Error('TRAINING_REVIEW_REQUIRED');
       }
       requireStatus(plan, 'READY_TO_PUBLISH');
+      if (plan.effectiveTo === null) {
+        throw new Error('EFFECTIVE_TO_REQUIRED');
+      }
+      if (plan.effectiveAt >= plan.effectiveTo) {
+        throw new Error('INVALID_EFFECTIVE_WINDOW');
+      }
       if (event.occurredAt.getTime() > plan.confirmationDeadlineAt.getTime() - 86_400_000) {
         throw new Error('PUBLICATION_LEAD_TIME_INSUFFICIENT');
       }
@@ -185,14 +191,40 @@ export function canCreatePendingVersion(
 export function resolveCurrentPlan<T extends {
   userId: string;
   status: 'ACTIVE';
+  effectiveAt: Date;
   effectiveTo: Date;
 }>(plans: readonly T[], userId: string, now: Date) {
-  const plan = plans.find(
+  const current = plans.filter(
     (candidate) =>
-      candidate.userId === userId && candidate.status === 'ACTIVE' && candidate.effectiveTo > now,
+      candidate.userId === userId &&
+      candidate.status === 'ACTIVE' &&
+      candidate.effectiveAt <= now &&
+      now < candidate.effectiveTo,
   );
 
-  return plan ? { status: 'ACTIVE' as const, plan } : { status: 'PLAN_GAP' as const, plan: null };
+  if (current.length > 1) {
+    return { status: 'PLAN_STATE_INVALID' as const, plan: null };
+  }
+  return current[0]
+    ? { status: 'ACTIVE' as const, plan: current[0] }
+    : { status: 'PLAN_GAP' as const, plan: null };
+}
+
+export function canGeneratePlanTasks(
+  plans: ReadonlyArray<{
+    userId: string;
+    status: PlanStatus;
+    effectiveAt: Date;
+    effectiveTo: Date | null;
+  }>,
+  userId: string,
+  now: Date,
+): boolean {
+  const active = plans.filter(
+    (plan): plan is typeof plan & { status: 'ACTIVE'; effectiveTo: Date } =>
+      plan.status === 'ACTIVE' && plan.effectiveTo !== null,
+  );
+  return resolveCurrentPlan(active, userId, now).status === 'ACTIVE';
 }
 
 function confirmPlanPart(
