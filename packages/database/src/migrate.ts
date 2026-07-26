@@ -38,6 +38,10 @@ const migrations = [
     version: '009_plan_lifecycle_persistence',
     file: '009_plan_lifecycle_persistence.sql',
   },
+  {
+    version: '010_p07_safe_structure',
+    file: '010_p07_safe_structure.sql',
+  },
 ] as const;
 
 export type MigrationVersion = (typeof migrations)[number]['version'];

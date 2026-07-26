@@ -3,7 +3,7 @@ import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildApplication } from './build-test-application.js';
+import { buildApplication as buildTestApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 
@@ -34,6 +34,14 @@ const policy: AuthSecurityPolicy = {
   scryptKeyLength: 32,
 };
 const profileFingerprintSecret = 'test-only-profile-idempotency-secret';
+const fictionalP07Providers = {
+  consentProvider: { getCurrentConsent: async () => ({ version: 'consent-v1', content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL TEST CONSENT' } }) },
+  screeningProvider: { isApprovedConclusion: async () => true },
+  profileSchemaProvider: { getApprovedProfileSchema: async () => ({ version: 'profile-test-v1', steps: [{ id: 'basics', fields: [{ name: 'goalType', type: 'STRING' as const }] }] }) },
+};
+function buildApplication(environment: Environment, options: Parameters<typeof buildTestApplication>[1] = {}) {
+  return buildTestApplication(environment, { ...fictionalP07Providers, ...options });
+}
 
 describe('identity and onboarding API', () => {
   let app: INestApplication | undefined;
@@ -79,8 +87,8 @@ describe('identity and onboarding API', () => {
       .send({ expectedVersion: 1 }).expect(200);
     const profile = await agent.put('/api/v1/onboarding/profile/steps/basics')
       .set(headers('profile-user')).set('Authorization', `Bearer ${userToken}`)
-      .send({ expectedVersion: 0, data: { goalType: 'FAT_LOSS' } }).expect(200);
-    expect(profile.body).toMatchObject({ businessStatus: 'PROFILE_DRAFT_SAVED', version: 1 });
+      .send({ expectedVersion: 0, data: { goalType: 'FAT_LOSS' } }).expect(503);
+    expect(profile.body).toMatchObject({ errorCode: 'PROFILE_ACCESS_NOT_APPROVED' });
 
     await seedStaff(app, 'reviewer-1', 'NUTRITION_REVIEWER');
     await app.get(DatabaseService).database.query(

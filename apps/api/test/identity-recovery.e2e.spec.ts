@@ -3,7 +3,7 @@ import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildApplication } from './build-test-application.js';
+import { buildApplication as buildTestApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 
@@ -33,6 +33,14 @@ const policy: AuthSecurityPolicy = {
   scryptParallelization: 1,
   scryptKeyLength: 32,
 };
+const fictionalP07Providers = {
+  consentProvider: { getCurrentConsent: async () => ({ version: 'consent-v1', content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL TEST CONSENT' } }) },
+  screeningProvider: { isApprovedConclusion: async () => true },
+  profileSchemaProvider: { getApprovedProfileSchema: async () => ({ version: 'profile-test-v1', steps: [{ id: 'basics', fields: [] }] }) },
+};
+function buildApplication(environment: Environment, options: Parameters<typeof buildTestApplication>[1] = {}) {
+  return buildTestApplication(environment, { ...fictionalP07Providers, ...options });
+}
 
 describe('identity recovery API', () => {
   let app: INestApplication | undefined;

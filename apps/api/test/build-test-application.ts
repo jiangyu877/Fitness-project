@@ -5,6 +5,7 @@ import type { Environment } from '../src/config/environment.js';
 import type { CurrentConsentVersionProvider } from '../src/identity/current-consent-version.js';
 import type { MfaVerifier } from '../src/identity/mfa-verifier.js';
 import type { PlanLifecycleClock } from '../src/plans/plan-lifecycle.service.js';
+import type { CurrentConsentProvider, ProfileSchemaProvider, ScreeningApprovalProvider } from '../src/identity/p07-providers.js';
 import { createRouteAccessSnapshot, type RouteAccessSnapshot } from '../src/readiness/route-access.js';
 
 type TestApplicationOptions = {
@@ -14,10 +15,9 @@ type TestApplicationOptions = {
   currentConsentVersion?: CurrentConsentVersionProvider;
   routeAccessSnapshot?: RouteAccessSnapshot;
   planClock?: PlanLifecycleClock;
-};
-
-const fictionalConsentVersion: CurrentConsentVersionProvider = {
-  getCurrentConsentVersion: async () => 'consent-v1',
+  consentProvider?: CurrentConsentProvider;
+  screeningProvider?: ScreeningApprovalProvider;
+  profileSchemaProvider?: ProfileSchemaProvider;
 };
 
 export function buildApplication(environment: Environment, options: TestApplicationOptions = {}) {
@@ -28,10 +28,12 @@ export function buildApplication(environment: Environment, options: TestApplicat
     mfaVerifierAvailable: true,
     hmacKeyAvailable: true,
     currentConsentVersionAvailable: true,
+    approvedConsentProviderAvailable: Boolean(options.consentProvider),
+    screeningApprovalProviderAvailable: Boolean(options.screeningProvider),
+    profileSchemaProviderAvailable: Boolean(options.profileSchemaProvider),
   });
   return buildProductionApplication(environment, {
     ...options,
-    currentConsentVersion: options.currentConsentVersion ?? fictionalConsentVersion,
     routeAccessSnapshot,
   });
 }

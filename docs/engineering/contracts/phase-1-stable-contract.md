@@ -215,6 +215,48 @@ These guarantees are currently covered by domain and migration tests. The full p
 - Deep links should carry only a target identifier and fetch the latest plan version or current state when opened.
 - Restore `GET /api/v1/identity/session` first and use its trusted `accountId`; then request `GET /api/v1/users/{accountId}/plans/pending`. Never derive or hard-code a user ID in the client.
 
+## P07 Safe Structure Contract
+
+- `GET /api/v1/onboarding/consents/current` is USER-only and returns
+  `CURRENT_CONSENT_AVAILABLE`, `consentVersion`, and provider-supplied
+  `{format: "PLAIN_TEXT", text}`. Missing, malformed, or unapproved providers
+  return 503 `CURRENT_CONSENT_VERSION_UNAVAILABLE` with no content. Version and
+  text must remain non-empty after trimming. The accepted provider value is
+  deep-copied and frozen at startup so later caller mutation cannot change the
+  pinned version or content.
+- `GET /api/v1/onboarding/screening-status` is a self-scoped read and returns
+  only `conclusion` (`PASS`, `HUMAN_REVIEW`, `EXCLUDED`, or `null`) and the
+  server-derived `nextAction`. It never returns rules, thresholds, diagnosis,
+  reviewer identity, or raw screening input.
+- `GET /api/v1/onboarding/profile` is a self-scoped read available only after
+  current consent, trusted `PASS`, and an approved schema. It returns
+  `schemaVersion`, ordered schema steps, `recordVersion`, `completedSteps`,
+  `currentStep`, and the user's drafts. A pre-010 row whose `schema_version` is
+  null is isolated: its JSON is not returned, merged, or implicitly upgraded.
+  The approved provider schema is structurally copied and deeply frozen at
+  startup, including every step, field, and nested array, so later mutation of
+  the provider-owned object cannot alter the pinned schema version or shape.
+- `PUT /api/v1/onboarding/profile/steps/{step}` accepts
+  `{schemaVersion, expectedVersion, data}`. Unknown schema versions, steps,
+  fields, or structural types return 422 `PROFILE_SCHEMA_VALIDATION_FAILED` or
+  409 `PROFILE_SCHEMA_VERSION_REQUIRED`; no arbitrary JSON compatibility path
+  exists. Profile values are excluded from request fingerprints and audits.
+- After a successful profile completion, session recovery is authoritative and
+  returns `WAIT_FOR_PLAN`; incomplete consent, screening, or profile is a
+  fail-closed prerequisite for plan/task business routes.
+- A trusted screening conclusion requires an active STAFF recorder, the
+  persisted reviewer role matching `NUTRITION_REVIEWER` or
+  `TRAINING_REVIEWER`, non-null qualification evidence, and provider approval
+  over the conclusion plus recorder evidence. Provider errors resolve to
+  `CONTACT_OPERATIONS` rather than an HTTP 500 after session creation.
+- `PUBLISH` obtains the target USER account row lock before reading or locking
+  the plan version, then rechecks current consent, latest trusted screening,
+  and approved-schema profile completion inside the same database transaction
+  before idempotency claim, state transition, and audit. Screening writes take
+  the same USER account row lock. Therefore a committed `HUMAN_REVIEW` or
+  `EXCLUDED` fallback that wins this serialization order prevents publication,
+  leaves the plan unchanged, and creates no publication idempotency projection.
+
 ## Deferred Release Inputs
 
 The following remain outside this implementation and continue to block real-user testing or production deployment as applicable:

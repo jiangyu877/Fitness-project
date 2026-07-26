@@ -15,7 +15,7 @@ import {
   type PlanRepositoryRecord,
   type PlanWriteMetadata,
 } from '@lianban/database';
-import type { ActorRole } from '../identity/identity-onboarding.service.js';
+import { IdentityOnboardingService, type ActorRole } from '../identity/identity-onboarding.service.js';
 import type { Environment } from '../config/environment.js';
 import { DatabaseService } from '../database/database.service.js';
 import { ENVIRONMENT } from '../readiness/readiness.controller.js';
@@ -44,6 +44,7 @@ export class PlanLifecycleService {
     @Inject(ENVIRONMENT) private readonly environment: Environment,
     @Inject(DatabaseService) databaseService: DatabaseService,
     @Inject(PLAN_LIFECYCLE_CLOCK) private readonly clock: PlanLifecycleClock,
+    @Inject(IdentityOnboardingService) private readonly onboarding: IdentityOnboardingService,
   ) {
     this.repository = new PGlitePlanRepository(
       databaseService.database,
@@ -59,6 +60,10 @@ export class PlanLifecycleService {
     contentMode: ContentMode;
     createdBy: string;
   }, metadata: PlanRequestMetadata): Promise<PlanVersion> {
+    const readiness = await this.onboarding.planReadiness(input.userId);
+    if (!readiness.allowed) {
+      throw planConflict('ONBOARDING_NOT_READY', 'PLAN_CREATION_BLOCKED', ['COMPLETE_ONBOARDING']);
+    }
     if (input.effectiveTo && input.effectiveTo <= input.effectiveAt) {
       throw planConflict('INVALID_EFFECTIVE_WINDOW', 'PLAN_VERSION_INVALID', ['EDIT_PLAN']);
     }
@@ -98,9 +103,7 @@ export class PlanLifecycleService {
       metadata, actor.accountId, actor.role, `TRANSITION_PLAN_VERSION:${event.type}`,
       `PLAN_${event.type}`, id,
     );
-    if (event.type === 'PUBLISH') {
-      this.assertPublishable(stored);
-    }
+    if (event.type === 'PUBLISH') this.assertPublishable(stored);
     try {
       const result = await this.repository.transitionWithWrite(id, writeMetadata, (lockedRecord, trustedNow) => {
         const locked = this.deserialize(lockedRecord);
@@ -138,7 +141,18 @@ export class PlanLifecycleService {
           },
           supersedeActive: trustedEvent.type === 'ACTIVATE',
         };
-      }, { enforceSinglePending: event.type === 'PUBLISH' });
+      }, {
+        enforceSinglePending: event.type === 'PUBLISH',
+        ...(event.type === 'PUBLISH' ? {
+          serializeOnAccountId: stored.plan.userId,
+          beforeClaim: async (transaction, record) => {
+            const readiness = await this.onboarding.planReadiness(record.userId, transaction);
+            if (!readiness.allowed) {
+              throw planConflict('ONBOARDING_NOT_READY', 'PLAN_PUBLICATION_BLOCKED', ['COMPLETE_ONBOARDING']);
+            }
+          },
+        } : {}),
+      });
       const persisted = this.deserialize(result.record).plan;
       if ((result.terminalError === 'CONFIRMATION_DEADLINE_PASSED' || persisted.status === 'CONFIRMATION_TIMED_OUT')
         && (event.type === 'CONFIRM_DIET' || event.type === 'CONFIRM_TRAINING')) {
@@ -180,6 +194,10 @@ export class PlanLifecycleService {
     planVersion: string | null;
     items: never[];
   }> {
+    const readiness = await this.onboarding.planReadiness(userId);
+    if (!readiness.allowed) {
+      return { businessStatus: 'PLAN_GAP', planVersion: null, items: [] };
+    }
     const plans = (await this.repository.listByUser(userId)).map((record) => this.deserialize(record).plan);
     const trustedNow = await this.repository.currentTrustedTime();
     if (!canGeneratePlanTasks(plans, userId, trustedNow)) {

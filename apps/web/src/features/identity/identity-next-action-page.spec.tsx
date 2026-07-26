@@ -11,6 +11,7 @@ import { AppRoutes } from '../../app/app.js';
 import { IdentityError, type IdentityClient } from './identity-client.js';
 import { pathForNextAction } from '../auth-onboarding/auth-onboarding-pages.js';
 import type { PlanClient } from '../plans-real/plan-client.js';
+import type { P07Client } from '../p07-real/p07-client.js';
 
 afterEach(cleanup);
 
@@ -127,10 +128,12 @@ describe('IdentityNextActionPage', () => {
   });
 
   it('routes a recovered real session to the isolated consent state instead of demo consent', async () => {
-    const client = identityClient({ restoreSession: vi.fn().mockResolvedValue({ kind: 'session-created', expiresAt: '2026-07-23T18:00:00Z', nextAction: 'ACCEPT_CURRENT_CONSENT' }) });
-    render(<MemoryRouter initialEntries={['/h5/login']}><AppRoutes identityClient={client} /></MemoryRouter>);
+    const client = identityClient({ restoreSession: vi.fn().mockResolvedValue({ kind: 'session-created', accountId: 'trusted-user', token: 'trusted-token', expiresAt: '2026-07-23T18:00:00Z', nextAction: 'ACCEPT_CURRENT_CONSENT' }) });
+    const currentConsent = vi.fn().mockResolvedValue({ businessStatus: 'CURRENT_CONSENT_AVAILABLE', consentVersion: 'v2', content: { format: 'PLAIN_TEXT', text: '真实服务端授权正文' } });
+    render(<MemoryRouter initialEntries={['/h5/login']}><AppRoutes identityClient={client} p07Client={p07Client({ currentConsent })} /></MemoryRouter>);
 
-    expect(await screen.findByText('当前授权内容尚未接入，不能继续')).toBeInTheDocument();
+    expect(await screen.findByText('真实服务端授权正文')).toBeInTheDocument();
+    expect(currentConsent).toHaveBeenCalledWith({ accountId: 'trusted-user', token: 'trusted-token' });
     expect(screen.queryByText('说明版本 v1.0-demo')).not.toBeInTheDocument();
   });
 
@@ -138,7 +141,7 @@ describe('IdentityNextActionPage', () => {
     const outage = identityClient({ restoreSession: vi.fn().mockRejectedValue(new IdentityError('恢复被阻断。', status, 'RECOVERY_BLOCKED')) });
     render(<MemoryRouter initialEntries={['/h5/login']}><AppRoutes identityClient={outage} /></MemoryRouter>);
     const summary = await screen.findByRole('alert');
-    expect(summary).toHaveFocus();
+    await waitFor(() => expect(summary).toHaveFocus());
     expect(screen.queryByRole('button', { name: '重试恢复' })).not.toBeInTheDocument();
   });
 
@@ -161,7 +164,8 @@ describe('IdentityNextActionPage', () => {
     let resolveRestore!: (session: Awaited<ReturnType<IdentityClient['restoreSession']>>) => void;
     const restoreSession = vi.fn().mockReturnValue(new Promise((resolve) => { resolveRestore = resolve; }));
     const client = identityClient({ hasStoredSession: () => true, restoreSession });
-    render(<MemoryRouter initialEntries={['/h5/today']}><AppRoutes identityClient={client} /></MemoryRouter>);
+    const screeningStatus = vi.fn().mockResolvedValue({ businessStatus: 'SCREENING_STATUS_AVAILABLE', nextAction: 'WAIT_FOR_PLAN', conclusion: 'PASS' });
+    render(<MemoryRouter initialEntries={['/h5/today']}><AppRoutes identityClient={client} p07Client={p07Client({ screeningStatus })} /></MemoryRouter>);
 
     expect(screen.getByRole('status')).toHaveTextContent('正在确认登录状态');
     expect(screen.queryByText('今天，先完成最重要的事')).not.toBeInTheDocument();
@@ -171,18 +175,20 @@ describe('IdentityNextActionPage', () => {
       kind: 'session-created', accountId: 'restored-user', token: 'restored-token',
       expiresAt: '2026-07-23T18:00:00Z', nextAction: 'WAIT_FOR_PLAN',
     });
-    expect(await screen.findByText('计划正在准备中')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '计划准备中' })).toBeInTheDocument();
+    expect(screeningStatus).toHaveBeenCalledWith({ accountId: 'restored-user', token: 'restored-token' });
   });
 
   it('retries recovery after an outage and follows the returned real-session action', async () => {
     const restoreSession = vi.fn()
       .mockRejectedValueOnce(new IdentityError('服务端允许重试。', 503, 'SERVICE_UNAVAILABLE', ['RETRY']))
-      .mockResolvedValueOnce({ kind: 'session-created', expiresAt: '2026-07-23T18:00:00Z', nextAction: 'WAIT_FOR_PLAN' });
+      .mockResolvedValueOnce({ kind: 'session-created', accountId: 'restored-user', token: 'restored-token', expiresAt: '2026-07-23T18:00:00Z', nextAction: 'WAIT_FOR_PLAN' });
     const client = identityClient({ restoreSession });
-    render(<MemoryRouter initialEntries={['/h5/login']}><AppRoutes identityClient={client} /></MemoryRouter>);
+    const screeningStatus = vi.fn().mockResolvedValue({ businessStatus: 'SCREENING_STATUS_AVAILABLE', nextAction: 'WAIT_FOR_PLAN', conclusion: 'PASS' });
+    render(<MemoryRouter initialEntries={['/h5/login']}><AppRoutes identityClient={client} p07Client={p07Client({ screeningStatus })} /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: '重试恢复' }));
-    expect(await screen.findByText('计划正在准备中')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '计划准备中' })).toBeInTheDocument();
     await waitFor(() => expect(restoreSession).toHaveBeenCalledTimes(2));
   });
 });
@@ -208,5 +214,11 @@ function planClient(overrides: Partial<PlanClient>): PlanClient {
     pending: vi.fn().mockResolvedValue({ businessStatus: 'NO_PENDING_PLAN', plan: null }),
     detail: vi.fn(),
     ...overrides,
+  };
+}
+
+function p07Client(overrides: Partial<P07Client>): P07Client {
+  return {
+    currentConsent: vi.fn(), acceptConsent: vi.fn(), screeningStatus: vi.fn(), profile: vi.fn(), saveProfileStep: vi.fn(), ...overrides,
   };
 }

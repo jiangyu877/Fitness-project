@@ -64,6 +64,9 @@ describe('phase 1 HTTP API contract', () => {
           'BACKUP_RESTORE_DRILL_INCOMPLETE',
           'OPERATIONS_READINESS_INCOMPLETE',
           'DEPLOYMENT_SECURITY_UNAPPROVED',
+          'APPROVED_CONSENT_PROVIDER_UNAVAILABLE',
+          'SCREENING_APPROVAL_PROVIDER_UNAVAILABLE',
+          'PROFILE_SCHEMA_PROVIDER_UNAVAILABLE',
         ],
       });
   });
@@ -81,6 +84,9 @@ describe('phase 1 HTTP API contract', () => {
         'BACKUP_RESTORE_DRILL_INCOMPLETE',
         'OPERATIONS_READINESS_INCOMPLETE',
         'DEPLOYMENT_SECURITY_UNAPPROVED',
+        'APPROVED_CONSENT_PROVIDER_UNAVAILABLE',
+        'SCREENING_APPROVAL_PROVIDER_UNAVAILABLE',
+        'PROFILE_SCHEMA_PROVIDER_UNAVAILABLE',
       ],
     });
   });
@@ -102,19 +108,35 @@ describe('phase 1 HTTP API contract', () => {
       mfaVerifier: approvedMfaVerifier,
       profileFingerprintSecret: 'test-profile-secret',
       currentConsentVersion: { getCurrentConsentVersion: async () => 'consent-v1' },
-      routeAccessSnapshot: createRouteAccessSnapshot({
-        environment: readyEnvironment,
-        audience: 'REAL_USER',
-        authPolicyAvailable: true,
-        mfaVerifierAvailable: true,
-        hmacKeyAvailable: true,
-        currentConsentVersionAvailable: true,
-      }),
+      ...fictionalP07Providers,
     });
     await request(app.getHttpServer()).get('/api/v1/readiness').expect(200).expect({
       readyForRealUsers: true,
       blockers: [],
     });
+  });
+
+  it('keeps real-user readiness false when any P07 provider is unavailable', async () => {
+    const readyEnvironment = {
+      ...baseEnvironment, demoMode: false, professionalRulesApproved: true,
+      authSecurityPolicyApproved: true, privacyReviewApproved: true,
+      dataRightsDrillComplete: true, backupRestoreDrillComplete: true,
+      operationsReadinessApproved: true, deploymentSecurityApproved: true,
+    };
+    app = await buildProductionApplication(readyEnvironment, {
+      authPolicy: approvedPolicy, mfaVerifier: approvedMfaVerifier,
+      profileFingerprintSecret: 'test-profile-secret',
+      currentConsentVersion: { getCurrentConsentVersion: async () => 'consent-v1' },
+    });
+    await request(app.getHttpServer()).get('/api/v1/readiness').expect(200)
+      .expect(({ body }) => {
+        expect(body.readyForRealUsers).toBe(false);
+        expect(body.blockers).toEqual(expect.arrayContaining([
+          'APPROVED_CONSENT_PROVIDER_UNAVAILABLE',
+          'SCREENING_APPROVAL_PROVIDER_UNAVAILABLE',
+          'PROFILE_SCHEMA_PROVIDER_UNAVAILABLE',
+        ]));
+      });
   });
 
   it.each([
@@ -350,7 +372,12 @@ describe('phase 1 HTTP API contract', () => {
 
   it('pins the current consent version once so readiness and runtime cannot drift', async () => {
     let calls = 0;
-    const provider = { getCurrentConsentVersion: async () => (++calls === 1 ? 'consent-v1' : 'consent-v2') };
+    const provider = {
+      getCurrentConsent: async () => ({
+        version: ++calls === 1 ? 'consent-v1' : 'consent-v2',
+        content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL PINNING TEST CONSENT' },
+      }),
+    };
     const readyEnvironment = {
       ...baseEnvironment, demoMode: false, professionalRulesApproved: true,
       authSecurityPolicyApproved: true, privacyReviewApproved: true, dataRightsDrillComplete: true,
@@ -358,7 +385,9 @@ describe('phase 1 HTTP API contract', () => {
     };
     app = await buildProductionApplication(readyEnvironment, {
       authPolicy: approvedPolicy, mfaVerifier: approvedMfaVerifier,
-      profileFingerprintSecret: 'test-profile-secret', currentConsentVersion: provider,
+      profileFingerprintSecret: 'test-profile-secret', consentProvider: provider,
+      screeningProvider: fictionalP07Providers.screeningProvider,
+      profileSchemaProvider: fictionalP07Providers.profileSchemaProvider,
     });
     await request(app.getHttpServer()).get('/api/v1/readiness').expect(200)
       .expect(({ body }) => expect(body.readyForRealUsers).toBe(true));
@@ -372,6 +401,21 @@ const approvedPolicy = {
   scryptBlockSize: 8, scryptParallelization: 1, scryptKeyLength: 32,
 } as const;
 const approvedMfaVerifier = { verify: async () => true };
+const fictionalP07Providers = {
+  consentProvider: {
+    getCurrentConsent: async () => ({
+      version: 'consent-v1',
+      content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL READINESS TEST CONSENT' },
+    }),
+  },
+  screeningProvider: { isApprovedConclusion: async () => true },
+  profileSchemaProvider: {
+    getApprovedProfileSchema: async () => ({
+      version: 'profile-readiness-test-v1',
+      steps: [{ id: 'readiness', fields: [{ name: 'fictionalReady', type: 'BOOLEAN' as const, required: true }] }],
+    }),
+  },
+};
 
 async function businessSideEffectCounts(db: DatabaseService['database']) {
   const result = await db.query<{ accounts: number; consents: number; plans: number; idempotency: number }>(`

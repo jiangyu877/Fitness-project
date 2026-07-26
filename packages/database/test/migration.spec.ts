@@ -343,6 +343,26 @@ describe('core database migration', () => {
       `),
     ).rejects.toThrow(/published plan version is immutable/i);
   });
+
+  it('upgrades 009 to 010 without treating legacy arbitrary JSON as an approved profile schema', async () => {
+    database = new PGlite();
+    await applyMigrationsThrough(database, '009_plan_lifecycle_persistence');
+    await database.exec(`
+      INSERT INTO iam.account (id, login_identifier, password_hash, account_type)
+      VALUES ('legacy-profile-user', 'legacy-profile-user', 'hash', 'USER');
+      INSERT INTO care.user_profile (id, user_id, profile_data, completed_steps)
+      VALUES ('legacy-profile', 'legacy-profile-user', '{"legacy":"value"}', '["legacy"]');
+    `);
+
+    await applyMigrationsThrough(database, '010_p07_safe_structure');
+    const profile = await database.query<{ schema_version: string | null }>(
+      `SELECT schema_version FROM care.user_profile WHERE id='legacy-profile'`,
+    );
+    expect(profile.rows).toEqual([{ schema_version: null }]);
+    await expect(database.query(
+      `UPDATE care.user_profile SET schema_version='' WHERE id='legacy-profile'`,
+    )).rejects.toThrow();
+  });
 });
 
 async function seedPlan(target: PGlite): Promise<void> {

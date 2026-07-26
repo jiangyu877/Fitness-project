@@ -54,6 +54,7 @@ export type PlanTransitionDecision = {
   supersedeActive?: boolean;
   terminalError?: string;
 };
+export type PlanTransaction = Pick<PGlite, 'query'>;
 
 export class PGlitePlanRepository {
   constructor(
@@ -276,9 +277,16 @@ export class PGlitePlanRepository {
     id: string,
     metadata: PlanWriteMetadata,
     decide: (record: PlanRepositoryRecord, trustedNow: Date) => PlanTransitionDecision,
-    options: { enforceSinglePending?: boolean } = {},
+    options: {
+      enforceSinglePending?: boolean;
+      serializeOnAccountId?: string;
+      beforeClaim?: (transaction: PlanTransaction, record: PlanRepositoryRecord) => Promise<void>;
+    } = {},
   ): Promise<{ record: PlanRepositoryRecord; replayed: boolean; terminalError?: string }> {
     return this.database.transaction(async (transaction) => {
+      if (options.serializeOnAccountId) {
+        await transaction.query(`SELECT id FROM iam.account WHERE id=$1 FOR UPDATE`, [options.serializeOnAccountId]);
+      }
       const target = await transaction.query<{ planId: string }>(
         `SELECT plan_id AS "planId" FROM planning.plan_version WHERE id=$1`,
         [id],
@@ -294,6 +302,10 @@ export class PGlitePlanRepository {
       );
       const record = locked.rows[0] ? this.hydrate(locked.rows[0]) : null;
       if (!record) throw new Error('PLAN_VERSION_NOT_FOUND');
+      if (options.serializeOnAccountId && record.userId !== options.serializeOnAccountId) {
+        throw new Error('PLAN_VERSION_ACCOUNT_MISMATCH');
+      }
+      await options.beforeClaim?.(transaction, record);
       const replay = await this.claimWrite(transaction, metadata, record.payload);
       if (replay) return { record: this.recordFromResult(replay), replayed: true };
       const trustedNow = await this.trustedTransactionTime(transaction);

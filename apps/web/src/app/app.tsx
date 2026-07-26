@@ -36,6 +36,8 @@ import { IdentityError, type IdentityClient, type RestoredUserSession } from '..
 import { IdentityNextActionPage, IdentityRecoveryIssue, nextActionForIdentityPath } from '../features/identity/identity-next-action-page.js';
 import { createPlanClient, type PlanClient, type PlanSession } from '../features/plans-real/plan-client.js';
 import { RealPlanPage, type RealPlanPageKind } from '../features/plans-real/real-plan-page.js';
+import { createP07Client, type P07Client, type P07NextAction } from '../features/p07-real/p07-client.js';
+import { P07Page } from '../features/p07-real/p07-page.js';
 import { resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -53,6 +55,7 @@ const runtimeDemoEnvironment: DemoRuntimeEnvironment = {
   demoPersonaSwitcher: import.meta.env.VITE_DEMO_PERSONA_SWITCHER,
 };
 const defaultPlanClient = createPlanClient();
+const defaultP07Client = createP07Client();
 const DevelopmentPersonaSwitcher = import.meta.env.DEV
   ? React.lazy(() => import('./development-persona-switcher.js'))
   : null;
@@ -318,9 +321,9 @@ function GenericPage({ page }: { page: PageDefinition }) {
   );
 }
 
-export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient };
+export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient; p07Client?: P07Client };
 
-export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient }: AppRoutesProps) {
+export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient, p07Client = defaultP07Client }: AppRoutesProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const page = resolveRoute(location.pathname);
@@ -362,7 +365,13 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
     {...(recoveryError.recoverableActions.includes('RETRY') ? { onRetry: restore } : {})}
   /></main></div>;
   const identityAction = nextActionForIdentityPath(location.pathname);
-  if (identityAction) return <div className="h5-viewport"><main className="h5-main"><IdentityNextActionPage nextAction={identityAction} /></main></div>;
+  if (identityAction) {
+    const p07Actions = new Set(['ACCEPT_CURRENT_CONSENT', 'WAIT_FOR_SCREENING_RULES', 'WAIT_FOR_HUMAN_REVIEW', 'STOP_SERVICE_FLOW', 'COMPLETE_PROFILE', 'WAIT_FOR_PLAN']);
+    const p07Session = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
+    return <div className="h5-viewport"><main className="h5-main">{p07Actions.has(identityAction)
+      ? <P07Page action={identityAction as 'ACCEPT_CURRENT_CONSENT' | P07NextAction} session={p07Session} client={p07Client} onSessionRefresh={restore} />
+      : <IdentityNextActionPage nextAction={identityAction} />}</main></div>;
+  }
   if (location.pathname === '/h5/contact-operations') return <div className="h5-viewport"><main className="h5-main"><AuthOnboardingPage kind="contact-operations" identityClient={identityClient} /></main></div>;
   if (detailVersion) {
     const planSession = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;

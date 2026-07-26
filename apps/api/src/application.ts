@@ -6,6 +6,7 @@ import { setupOpenApi } from './openapi.js';
 import type { AuthSecurityPolicy } from '@lianban/domain';
 import type { MfaVerifier } from './identity/mfa-verifier.js';
 import type { CurrentConsentVersionProvider } from './identity/current-consent-version.js';
+import { validConsent, validProfileSchema, type CurrentConsentProvider, type ProfileSchemaProvider, type ScreeningApprovalProvider } from './identity/p07-providers.js';
 import type { PlanLifecycleClock } from './plans/plan-lifecycle.service.js';
 import { ROUTE_ACCESS_SNAPSHOT, isClassifiedProtectedRoute, isProtectedRoute, type RouteAccessSnapshot } from './readiness/route-access.js';
 import { DatabaseService } from './database/database.service.js';
@@ -20,9 +21,14 @@ type MiddlewareRequest = {
 type MiddlewareResponse = { status(statusCode: number): { json(body: unknown): void } };
 type MiddlewareNext = () => void;
 
-export async function buildApplication(environment: Environment, options?: { authPolicy?: AuthSecurityPolicy; mfaVerifier?: MfaVerifier; profileFingerprintSecret?: string; currentConsentVersion?: CurrentConsentVersionProvider; routeAccessSnapshot?: RouteAccessSnapshot; planClock?: PlanLifecycleClock }) {
-  const currentConsentVersion = await pinCurrentConsentVersion(options?.currentConsentVersion);
-  const app = await NestFactory.create(AppModule.forEnvironment(environment, options?.authPolicy ?? null, options?.mfaVerifier ?? null, options?.profileFingerprintSecret ?? null, currentConsentVersion, options?.routeAccessSnapshot ?? null, options?.planClock), {
+export async function buildApplication(environment: Environment, options?: { authPolicy?: AuthSecurityPolicy; mfaVerifier?: MfaVerifier; profileFingerprintSecret?: string; currentConsentVersion?: CurrentConsentVersionProvider; consentProvider?: CurrentConsentProvider; screeningProvider?: ScreeningApprovalProvider; profileSchemaProvider?: ProfileSchemaProvider; routeAccessSnapshot?: RouteAccessSnapshot; planClock?: PlanLifecycleClock }) {
+  const consentProvider = await pinConsentProvider(environment, options?.consentProvider);
+  const currentConsentVersion = consentProvider
+    ? { getCurrentConsentVersion: async () => (await consentProvider.getCurrentConsent()).version }
+    : await pinCurrentConsentVersion(options?.currentConsentVersion);
+  const profileSchemaProvider = await pinProfileSchemaProvider(environment, options?.profileSchemaProvider);
+  const screeningProvider = environment.nodeEnv === 'test' ? options?.screeningProvider ?? null : null;
+  const app = await NestFactory.create(AppModule.forEnvironment(environment, options?.authPolicy ?? null, options?.mfaVerifier ?? null, options?.profileFingerprintSecret ?? null, currentConsentVersion, options?.routeAccessSnapshot ?? null, options?.planClock, consentProvider, screeningProvider, profileSchemaProvider), {
     logger: false,
   });
   app.useGlobalFilters(new StableSecurityErrorFilter(app.getHttpAdapter()));
@@ -52,6 +58,37 @@ export async function buildApplication(environment: Environment, options?: { aut
   setupOpenApi(app);
   await app.init();
   return app;
+}
+
+async function pinConsentProvider(environment: Environment, provider?: CurrentConsentProvider): Promise<CurrentConsentProvider | null> {
+  if (environment.nodeEnv !== 'test' || !provider) return null;
+  try {
+    const consent = await provider.getCurrentConsent();
+    if (!validConsent(consent)) return null;
+    const snapshot = Object.freeze({
+      version: consent.version,
+      content: Object.freeze({ format: consent.content.format, text: consent.content.text }),
+    });
+    return { getCurrentConsent: async () => snapshot };
+  } catch { return null; }
+}
+
+async function pinProfileSchemaProvider(environment: Environment, provider?: ProfileSchemaProvider): Promise<ProfileSchemaProvider | null> {
+  if (environment.nodeEnv !== 'test' || !provider) return null;
+  try {
+    const schema = await provider.getApprovedProfileSchema();
+    if (!validProfileSchema(schema)) return null;
+    const steps = schema.steps.map((step) => Object.freeze({
+      id: step.id,
+      fields: Object.freeze(step.fields.map((field) => Object.freeze({
+        name: field.name,
+        type: field.type,
+        ...(field.required === undefined ? {} : { required: field.required }),
+      }))),
+    }));
+    const snapshot = Object.freeze({ version: schema.version, steps: Object.freeze(steps) });
+    return { getApprovedProfileSchema: async () => snapshot };
+  } catch { return null; }
 }
 
 @Catch(HttpException)

@@ -12,6 +12,7 @@ import { AUTH_POLICY, IdentityOnboardingService, PROFILE_FINGERPRINT_SECRET } fr
 import { validateAuthSecurityPolicy, type AuthSecurityPolicy } from '@lianban/domain';
 import { MFA_VERIFIER, type MfaVerifier } from './identity/mfa-verifier.js';
 import { CURRENT_CONSENT_VERSION, type CurrentConsentVersionProvider } from './identity/current-consent-version.js';
+import { CURRENT_CONSENT, PROFILE_SCHEMA, SCREENING_APPROVAL, type CurrentConsentProvider, type ProfileSchemaProvider, type ScreeningApprovalProvider } from './identity/p07-providers.js';
 import { createRouteAccessSnapshot, ROUTE_ACCESS_SNAPSHOT, type RouteAccessSnapshot } from './readiness/route-access.js';
 
 @Module({})
@@ -24,6 +25,9 @@ export class AppModule {
     currentConsentVersion: CurrentConsentVersionProvider | null = null,
     routeAccessSnapshot: RouteAccessSnapshot | null = null,
     planClock: PlanLifecycleClock = {},
+    consentProvider: CurrentConsentProvider | null = null,
+    screeningProvider: ScreeningApprovalProvider | null = null,
+    profileSchemaProvider: ProfileSchemaProvider | null = null,
   ): DynamicModule {
     const pinnedAuthPolicy = authPolicy ? Object.freeze({ ...authPolicy }) : null;
     const injectedPlanClock = environment.nodeEnv === 'test' ? planClock : {};
@@ -39,6 +43,9 @@ export class AppModule {
       mfaVerifierAvailable: Boolean(mfaVerifier),
       hmacKeyAvailable: Boolean(profileFingerprintSecret),
       currentConsentVersionAvailable: Boolean(currentConsentVersion),
+      approvedConsentProviderAvailable: Boolean(consentProvider),
+      screeningApprovalProviderAvailable: Boolean(screeningProvider),
+      profileSchemaProviderAvailable: Boolean(profileSchemaProvider),
     });
     return {
       module: AppModule,
@@ -60,6 +67,9 @@ export class AppModule {
         { provide: MFA_VERIFIER, useValue: mfaVerifier },
         { provide: PROFILE_FINGERPRINT_SECRET, useValue: profileFingerprintSecret },
         { provide: CURRENT_CONSENT_VERSION, useValue: currentConsentVersion },
+        { provide: CURRENT_CONSENT, useValue: consentProvider },
+        { provide: SCREENING_APPROVAL, useValue: screeningProvider },
+        { provide: PROFILE_SCHEMA, useValue: profileSchemaProvider },
       ],
     };
   }

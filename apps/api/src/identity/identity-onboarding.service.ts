@@ -6,6 +6,7 @@ import {
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import type { PGlite } from '@electric-sql/pglite';
 import {
@@ -21,6 +22,7 @@ import { DatabaseService } from '../database/database.service.js';
 import { ENVIRONMENT } from '../readiness/readiness.controller.js';
 import { MFA_VERIFIER, type MfaVerifier } from './mfa-verifier.js';
 import { CURRENT_CONSENT_VERSION, type CurrentConsentVersionProvider } from './current-consent-version.js';
+import { CURRENT_CONSENT, PROFILE_SCHEMA, SCREENING_APPROVAL, type CurrentConsentProvider, type ProfileSchemaProvider, type ScreeningApprovalProvider, type ScreeningConclusion } from './p07-providers.js';
 
 export const AUTH_POLICY = Symbol('AUTH_POLICY');
 export const PROFILE_FINGERPRINT_SECRET = Symbol('PROFILE_FINGERPRINT_SECRET');
@@ -70,6 +72,9 @@ export class IdentityOnboardingService {
     @Inject(MFA_VERIFIER) private readonly mfaVerifier: MfaVerifier | null,
     @Inject(PROFILE_FINGERPRINT_SECRET) private readonly profileFingerprintSecret: string | null,
     @Inject(CURRENT_CONSENT_VERSION) private readonly currentConsentVersion: CurrentConsentVersionProvider | null,
+    @Inject(CURRENT_CONSENT) private readonly consentProvider: CurrentConsentProvider | null,
+    @Inject(SCREENING_APPROVAL) private readonly screeningProvider: ScreeningApprovalProvider | null,
+    @Inject(PROFILE_SCHEMA) private readonly profileSchemaProvider: ProfileSchemaProvider | null,
   ) {}
 
   async invite(
@@ -322,6 +327,41 @@ export class IdentityOnboardingService {
     };
   }
 
+  async getCurrentConsent(token: string | null, meta: RequestMeta) {
+    await this.requireSession(token, 'USER', meta);
+    if (!this.consentProvider) {
+      throw new ServiceUnavailableException(this.error(meta, 'CURRENT_CONSENT_VERSION_UNAVAILABLE', ['WAIT_FOR_SECURITY_APPROVAL']));
+    }
+    const consent = await this.consentProvider.getCurrentConsent();
+    return { businessStatus: 'CURRENT_CONSENT_AVAILABLE', consentVersion: consent.version, content: consent.content };
+  }
+
+  async getScreeningStatus(token: string | null, meta: RequestMeta) {
+    const principal = await this.requireSession(token, 'USER', meta);
+    const state = await this.screeningState(principal.accountId);
+    return { businessStatus: 'SCREENING_STATUS_AVAILABLE', conclusion: state.conclusion, nextAction: state.nextAction };
+  }
+
+  async getProfile(token: string | null, meta: RequestMeta) {
+    const principal = await this.requireSession(token, 'USER', meta);
+    const schema = await this.requireProfileAccess(principal.accountId, meta);
+    const result = await this.db.database.query<{ version: number; schema_version: string | null; profile_data: Record<string, unknown>; completed_steps: string[] }>(
+      `SELECT version, schema_version, profile_data, completed_steps FROM care.user_profile WHERE user_id=$1`, [principal.accountId],
+    );
+    const row = result.rows[0];
+    if (row && (!row.schema_version || row.schema_version !== schema.version)) {
+      throw new ConflictException(this.error(meta, 'PROFILE_SCHEMA_VERSION_REQUIRED', ['REFRESH']));
+    }
+    const completedSteps = row?.completed_steps ?? [];
+    return {
+      businessStatus: 'PROFILE_DRAFT_AVAILABLE', schemaVersion: schema.version,
+      steps: schema.steps,
+      recordVersion: row?.version ?? 0, completedSteps,
+      currentStep: schema.steps.find((step) => !completedSteps.includes(step.id))?.id ?? null,
+      drafts: row?.profile_data ?? {},
+    };
+  }
+
   async logout(token: string | null, meta: RequestMeta) {
     this.requirePolicy(meta);
     const tokenHash = token ? createHash('sha256').update(token).digest('hex') : null;
@@ -487,11 +527,17 @@ export class IdentityOnboardingService {
   async saveProfile(
     token: string | null,
     step: string,
+    schemaVersion: string | null,
     expectedVersion: number,
     data: Record<string, unknown>,
     meta: RequestMeta,
   ) {
     const principal = await this.requireSession(token, 'USER', meta);
+    const schema = await this.requireProfileAccess(principal.accountId, meta);
+    if (schemaVersion !== schema.version) {
+      throw new ConflictException(this.error(meta, 'PROFILE_SCHEMA_VERSION_REQUIRED', ['REFRESH']));
+    }
+    this.validateProfileData(schema, step, data, meta);
     return this.write({
       meta,
       operation: 'ONBOARDING_PROFILE_STEP_SAVE',
@@ -501,7 +547,7 @@ export class IdentityOnboardingService {
       action: 'PROFILE_DRAFT_SAVED',
       subjectType: 'PROFILE',
       subjectId: principal.accountId,
-      execute: async (tx) => this.saveProfileStep(tx, principal.accountId, step, expectedVersion, data, meta),
+      execute: async (tx) => this.saveProfileStep(tx, principal.accountId, step, schema.version, expectedVersion, data, meta),
     });
   }
 
@@ -549,6 +595,7 @@ export class IdentityOnboardingService {
       subjectType: 'SCREENING',
       subjectId: input.userId,
       execute: async (tx) => {
+        await tx.query(`SELECT id FROM iam.account WHERE id=$1 FOR UPDATE`, [input.userId]);
         await tx.query(
           `INSERT INTO care.screening_result
              (id, user_id, conclusion, source, rule_version, recorded_by, actor_role)
@@ -574,6 +621,29 @@ export class IdentityOnboardingService {
 
   async authorizeAnySession(token: string | null, meta: RequestMeta): Promise<Principal> {
     return this.requireSession(token, null, meta);
+  }
+
+  async planReadiness(userId: string, sql: Sql = this.db.database): Promise<{ allowed: boolean; reason: string }> {
+    if (!this.consentProvider || !this.screeningProvider || !this.profileSchemaProvider) {
+      return { allowed: false, reason: 'ONBOARDING_PROVIDER_UNAVAILABLE' };
+    }
+    const current = await this.consentProvider.getCurrentConsent();
+    const consent = await sql.query<{ accepted: boolean }>(
+      `SELECT exists(SELECT 1 FROM care.consent_record WHERE user_id=$1 AND consent_version=$2 AND withdrawn_at IS NULL) AS accepted`,
+      [userId, current.version],
+    );
+    if (!consent.rows[0]?.accepted) return { allowed: false, reason: 'CONSENT_REQUIRED' };
+    const state = await this.screeningState(userId, sql);
+    if (state.conclusion !== 'PASS') return { allowed: false, reason: state.nextAction };
+    const schema = await this.profileSchemaProvider.getApprovedProfileSchema();
+    const profile = await sql.query<{ completed_steps: string[]; schema_version: string | null }>(
+      `SELECT completed_steps, schema_version FROM care.user_profile WHERE user_id=$1`, [userId],
+    );
+    const row = profile.rows[0];
+    if (!row || row.schema_version !== schema.version || !schema.steps.every((step) => row.completed_steps.includes(step.id))) {
+      return { allowed: false, reason: 'PROFILE_INCOMPLETE' };
+    }
+    return { allowed: true, reason: 'READY' };
   }
 
   async auditAuthorizationRejection(
@@ -916,6 +986,7 @@ export class IdentityOnboardingService {
     tx: Sql,
     userId: string,
     step: string,
+    schemaVersion: string,
     expectedVersion: number,
     data: Record<string, unknown>,
     meta: RequestMeta,
@@ -935,9 +1006,9 @@ export class IdentityOnboardingService {
       }
       await tx.query(
         `INSERT INTO care.user_profile
-           (id, user_id, profile_data, completed_steps, version)
-         VALUES ($1, $2, $3::jsonb, $4::jsonb, 1)`,
-        [randomUUID(), userId, JSON.stringify({ [step]: data }), JSON.stringify([step])],
+           (id, user_id, profile_data, completed_steps, version, schema_version)
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, 1, $5)`,
+        [randomUUID(), userId, JSON.stringify({ [step]: data }), JSON.stringify([step]), schemaVersion],
       );
       return { businessStatus: 'PROFILE_DRAFT_SAVED', requestId: meta.requestId, version: 1 };
     }
@@ -949,10 +1020,10 @@ export class IdentityOnboardingService {
     const steps = Array.from(new Set([...row.completed_steps, step]));
     const saved = await tx.query<{ version: number }>(
       `UPDATE care.user_profile
-       SET profile_data=$1::jsonb, completed_steps=$2::jsonb,
+       SET profile_data=$1::jsonb, completed_steps=$2::jsonb, schema_version=$5,
            version=version+1, updated_at=now()
        WHERE user_id=$3 AND version=$4 RETURNING version`,
-      [JSON.stringify(profile), JSON.stringify(steps), userId, expectedVersion],
+      [JSON.stringify(profile), JSON.stringify(steps), userId, expectedVersion, schemaVersion],
     );
     if (!saved.rows[0]) {
       throw new ConflictException(this.error(meta, 'VERSION_CONFLICT', ['REFRESH']));
@@ -1091,7 +1162,7 @@ export class IdentityOnboardingService {
   }
 
   private async userNextAction(accountId: string): Promise<
-    'ACCEPT_CURRENT_CONSENT' | 'WAIT_FOR_SCREENING_RULES' | 'CONTACT_OPERATIONS'
+    'ACCEPT_CURRENT_CONSENT' | 'WAIT_FOR_SCREENING_RULES' | 'WAIT_FOR_HUMAN_REVIEW' | 'STOP_SERVICE_FLOW' | 'COMPLETE_PROFILE' | 'WAIT_FOR_PLAN' | 'CONTACT_OPERATIONS'
   > {
     if (!this.currentConsentVersion) return 'CONTACT_OPERATIONS';
     let currentVersion: string;
@@ -1108,8 +1179,76 @@ export class IdentityOnboardingService {
       [accountId, currentVersion],
     );
     if (!consent.rows[0]?.accepted) return 'ACCEPT_CURRENT_CONSENT';
-    if (!this.environment.professionalRulesApproved) return 'WAIT_FOR_SCREENING_RULES';
-    return 'CONTACT_OPERATIONS';
+    if (!this.environment.professionalRulesApproved || !this.screeningProvider) return 'WAIT_FOR_SCREENING_RULES';
+    const state = await this.screeningState(accountId);
+    if (state.nextAction !== 'COMPLETE_PROFILE') return state.nextAction;
+    if (!this.profileSchemaProvider) return 'CONTACT_OPERATIONS';
+    const schema = await this.profileSchemaProvider.getApprovedProfileSchema();
+    const profile = await this.db.database.query<{ completed_steps: string[]; schema_version: string | null }>(
+      `SELECT completed_steps, schema_version FROM care.user_profile WHERE user_id=$1`, [accountId],
+    );
+    const row = profile.rows[0];
+    if (row && (!row.schema_version || row.schema_version !== schema.version)) return 'CONTACT_OPERATIONS';
+    return schema.steps.every((step) => row?.completed_steps.includes(step.id)) ? 'WAIT_FOR_PLAN' : 'COMPLETE_PROFILE';
+  }
+
+  private async screeningState(accountId: string, sql: Sql = this.db.database): Promise<{ conclusion: ScreeningConclusion | null; nextAction: 'WAIT_FOR_SCREENING_RULES' | 'WAIT_FOR_HUMAN_REVIEW' | 'STOP_SERVICE_FLOW' | 'COMPLETE_PROFILE' | 'CONTACT_OPERATIONS' }> {
+    if (!this.environment.professionalRulesApproved || !this.screeningProvider) {
+      return { conclusion: null, nextAction: 'WAIT_FOR_SCREENING_RULES' };
+    }
+    const result = await sql.query<{
+      conclusion: ScreeningConclusion; source: string; rule_version: string | null;
+      recorded_by: string; actor_role: string; account_type: string | null;
+      recorder_status: string | null; qualified_at: Date | null;
+    }>(
+      `SELECT sr.conclusion, sr.source, sr.rule_version, sr.recorded_by, sr.actor_role,
+              a.account_type, a.status AS recorder_status, ar.qualified_at
+       FROM care.screening_result sr
+       LEFT JOIN iam.account a ON a.id=sr.recorded_by
+       LEFT JOIN iam.account_role ar ON ar.account_id=sr.recorded_by AND ar.role_code=sr.actor_role
+       WHERE sr.user_id=$1 ORDER BY sr.created_at DESC, sr.id DESC LIMIT 1`, [accountId],
+    );
+    const row = result.rows[0];
+    if (!row) return { conclusion: null, nextAction: 'WAIT_FOR_SCREENING_RULES' };
+    if (row.account_type !== 'STAFF' || row.recorder_status !== 'ACTIVE' || !row.qualified_at
+      || (row.actor_role !== 'NUTRITION_REVIEWER' && row.actor_role !== 'TRAINING_REVIEWER')) {
+      return { conclusion: null, nextAction: 'CONTACT_OPERATIONS' };
+    }
+    try {
+      const approved = await this.screeningProvider.isApprovedConclusion({
+        source: row.source, ruleVersion: row.rule_version, conclusion: row.conclusion,
+        recordedBy: row.recorded_by, actorRole: row.actor_role, qualifiedAt: row.qualified_at,
+      });
+      if (!approved) return { conclusion: null, nextAction: 'CONTACT_OPERATIONS' };
+    } catch {
+      return { conclusion: null, nextAction: 'CONTACT_OPERATIONS' };
+    }
+    if (row.conclusion === 'HUMAN_REVIEW') return { conclusion: row.conclusion, nextAction: 'WAIT_FOR_HUMAN_REVIEW' };
+    if (row.conclusion === 'EXCLUDED') return { conclusion: row.conclusion, nextAction: 'STOP_SERVICE_FLOW' };
+    return { conclusion: row.conclusion, nextAction: 'COMPLETE_PROFILE' };
+  }
+
+  private async requireProfileAccess(accountId: string, meta: RequestMeta) {
+    const nextAction = await this.userNextAction(accountId);
+    if (nextAction !== 'COMPLETE_PROFILE' && nextAction !== 'WAIT_FOR_PLAN') {
+      throw new ServiceUnavailableException(this.error(meta, 'PROFILE_ACCESS_NOT_APPROVED', ['WAIT_FOR_SECURITY_APPROVAL']));
+    }
+    if (!this.profileSchemaProvider) {
+      throw new ServiceUnavailableException(this.error(meta, 'PROFILE_SCHEMA_UNAVAILABLE', ['WAIT_FOR_SECURITY_APPROVAL']));
+    }
+    return this.profileSchemaProvider.getApprovedProfileSchema();
+  }
+
+  private validateProfileData(schema: Awaited<ReturnType<ProfileSchemaProvider['getApprovedProfileSchema']>>, stepId: string, data: Record<string, unknown>, meta: RequestMeta): void {
+    try {
+      const step = schema.steps.find((candidate) => candidate.id === stepId);
+      const invalid = !step || Object.keys(data).some((key) => !step.fields.some((field) => field.name === key))
+        || (!!step && step.fields.some((field) => field.required && !(field.name in data)))
+        || (!!step && step.fields.some((field) => field.name in data && typeof data[field.name] !== field.type.toLowerCase()));
+      if (invalid) throw new Error('PROFILE_SCHEMA_VALIDATION_FAILED');
+    } catch {
+      throw new UnprocessableEntityException(this.error(meta, 'PROFILE_SCHEMA_VALIDATION_FAILED', []));
+    }
   }
 
   private async requireCurrentConsentVersion(meta: RequestMeta): Promise<string> {

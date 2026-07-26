@@ -32,6 +32,15 @@ const staffRoles = [
   'SYSTEM_ADMIN',
   'AUDIT_VIEWER',
 ] as const;
+const userNextActions = [
+  'ACCEPT_CURRENT_CONSENT',
+  'WAIT_FOR_SCREENING_RULES',
+  'WAIT_FOR_HUMAN_REVIEW',
+  'STOP_SERVICE_FLOW',
+  'COMPLETE_PROFILE',
+  'WAIT_FOR_PLAN',
+  'CONTACT_OPERATIONS',
+] as const;
 const objectSchema = (required: string[], properties: Record<string, unknown>): any => ({
   type: 'object',
   required,
@@ -176,7 +185,7 @@ export class IdentityOnboardingController {
       sessionType: { type: 'string', enum: ['USER'] },
       businessStatus: { type: 'string', enum: ['SESSION_CREATED'] }, requestId: { type: 'string' }, sessionId: { type: 'string' },
       sessionToken: { type: 'string' }, expiresAt: { type: 'string', format: 'date-time' },
-      nextAction: { type: 'string', enum: ['ACCEPT_CURRENT_CONSENT', 'WAIT_FOR_SCREENING_RULES', 'CONTACT_OPERATIONS'] },
+      nextAction: { type: 'string', enum: userNextActions },
     }),
     objectSchema(['sessionType', 'businessStatus', 'requestId', 'sessionId', 'sessionToken', 'expiresAt'], {
       sessionType: { type: 'string', enum: ['STAFF'] },
@@ -201,10 +210,43 @@ export class IdentityOnboardingController {
   @ApiOkResponse({ schema: objectSchema(['accountId', 'accountType', 'activeRole', 'expiresAt', 'businessStatus', 'nextAction'], {
     accountId: { type: 'string' }, accountType: { type: 'string', enum: ['USER'] }, activeRole: { type: 'string', enum: ['USER'] },
     expiresAt: { type: 'string', format: 'date-time' }, businessStatus: { type: 'string', enum: ['SESSION_ACTIVE'] },
-    nextAction: { type: 'string', enum: ['ACCEPT_CURRENT_CONSENT', 'WAIT_FOR_SCREENING_RULES', 'CONTACT_OPERATIONS'] },
+    nextAction: { type: 'string', enum: userNextActions },
   }) })
   session(@Headers() headers: Record<string, string>) {
     return this.service.getSession(bearerToken(headers), readRequestMeta(headers));
+  }
+
+  @Get('onboarding/consents/current')
+  @ApiBearerAuth()
+  @ApiOkResponse({ schema: objectSchema(['businessStatus', 'consentVersion', 'content'], {
+    businessStatus: { type: 'string', enum: ['CURRENT_CONSENT_AVAILABLE'] },
+    consentVersion: { type: 'string' },
+    content: { type: 'object', required: ['format', 'text'], properties: { format: { type: 'string', enum: ['PLAIN_TEXT'] }, text: { type: 'string' } }, additionalProperties: false },
+  }) })
+  currentConsent(@Headers() headers: Record<string, string>) {
+    return this.service.getCurrentConsent(bearerToken(headers), readRequestMeta(headers));
+  }
+
+  @Get('onboarding/screening-status')
+  @ApiBearerAuth()
+  @ApiOkResponse({ schema: objectSchema(['businessStatus', 'conclusion', 'nextAction'], {
+    businessStatus: { type: 'string', enum: ['SCREENING_STATUS_AVAILABLE'] },
+    conclusion: { type: 'string', enum: ['PASS', 'HUMAN_REVIEW', 'EXCLUDED'], nullable: true },
+    nextAction: { type: 'string' },
+  }) })
+  screeningStatus(@Headers() headers: Record<string, string>) {
+    return this.service.getScreeningStatus(bearerToken(headers), readRequestMeta(headers));
+  }
+
+  @Get('onboarding/profile')
+  @ApiBearerAuth()
+  @ApiOkResponse({ schema: objectSchema(['businessStatus', 'schemaVersion', 'steps', 'recordVersion', 'completedSteps', 'currentStep', 'drafts'], {
+    businessStatus: { type: 'string', enum: ['PROFILE_DRAFT_AVAILABLE'] }, schemaVersion: { type: 'string' }, recordVersion: { type: 'integer' },
+    steps: { type: 'array', items: { type: 'object' } },
+    completedSteps: { type: 'array', items: { type: 'string' } }, currentStep: { type: 'string', nullable: true }, drafts: { type: 'object' },
+  }) })
+  profile(@Headers() headers: Record<string, string>) {
+    return this.service.getProfile(bearerToken(headers), readRequestMeta(headers));
   }
 
   @Post('identity/session/logout')
@@ -282,7 +324,8 @@ export class IdentityOnboardingController {
   @Put('onboarding/profile/steps/:step')
   @ApiHeader({ name: 'idempotency-key', required: true })
   @ApiBearerAuth()
-  @ApiBody({ schema: objectSchema(['expectedVersion', 'data'], {
+  @ApiBody({ schema: objectSchema(['schemaVersion', 'expectedVersion', 'data'], {
+    schemaVersion: { type: 'string' },
     expectedVersion: { type: 'integer', minimum: 0 },
     data: { type: 'object', additionalProperties: true },
   }) })
@@ -295,12 +338,14 @@ export class IdentityOnboardingController {
     @Headers() headers: Record<string, string>,
   ) {
     const input = z.object({
+      schemaVersion: z.string().min(1).optional(),
       expectedVersion: z.number().int().nonnegative(),
       data: z.record(z.string(), z.unknown()),
     }).parse(body);
     return this.service.saveProfile(
       bearerToken(headers),
       step,
+      input.schemaVersion ?? null,
       input.expectedVersion,
       input.data,
       requestMeta(headers),

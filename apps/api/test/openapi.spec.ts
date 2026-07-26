@@ -60,8 +60,11 @@ describe('OpenAPI contract', () => {
       '/api/v1/identity/session/logout',
       '/api/v1/identity/accounts/{id}/status',
       '/api/v1/onboarding/consents',
+      '/api/v1/onboarding/consents/current',
       '/api/v1/onboarding/consents/{id}/withdraw',
+      '/api/v1/onboarding/profile',
       '/api/v1/onboarding/profile/steps/{step}',
+      '/api/v1/onboarding/screening-status',
       '/api/v1/onboarding/screening-results',
     ]) expect(document.paths).toHaveProperty(path);
     for (const [path, method, status] of [
@@ -72,8 +75,11 @@ describe('OpenAPI contract', () => {
       ['/api/v1/identity/session/logout', 'post', '200'],
       ['/api/v1/identity/accounts/{id}/status', 'post', '200'],
       ['/api/v1/onboarding/consents', 'post', '201'],
+      ['/api/v1/onboarding/consents/current', 'get', '200'],
       ['/api/v1/onboarding/consents/{id}/withdraw', 'post', '200'],
+      ['/api/v1/onboarding/profile', 'get', '200'],
       ['/api/v1/onboarding/profile/steps/{step}', 'put', '200'],
+      ['/api/v1/onboarding/screening-status', 'get', '200'],
       ['/api/v1/onboarding/screening-results', 'post', '201'],
     ] as const) {
       const operation = document.paths[path]?.[method];
@@ -197,6 +203,15 @@ describe('OpenAPI contract', () => {
       expect.objectContaining({ required: expect.arrayContaining(['sessionId', 'sessionToken', 'nextAction']) }),
       expect.objectContaining({ required: expect.arrayContaining(['sessionId', 'sessionToken']) }),
     ]));
+    const nextActions = [
+      'ACCEPT_CURRENT_CONSENT', 'WAIT_FOR_SCREENING_RULES', 'WAIT_FOR_HUMAN_REVIEW',
+      'STOP_SERVICE_FLOW', 'COMPLETE_PROFILE', 'WAIT_FOR_PLAN', 'CONTACT_OPERATIONS',
+    ];
+    const userLoginSchema = loginSchema.oneOf.find((schema: any) => schema.properties?.sessionType?.enum?.includes('USER'));
+    expect(userLoginSchema.properties.nextAction.enum).toEqual(nextActions);
+    const recoverySchema = (document.paths['/api/v1/identity/session']?.get?.responses?.['200'] as any)
+      ?.content?.['application/json']?.schema;
+    expect(recoverySchema.properties.nextAction.enum).toEqual(nextActions);
     for (const errorCode of [
       'IDEMPOTENCY_KEY_REUSED',
       'LOGIN_REPLAY_REQUIRES_REAUTHENTICATION',

@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildApplication } from './build-test-application.js';
+import { buildApplication as buildTestApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 
@@ -36,6 +36,25 @@ const policy: AuthSecurityPolicy = {
   scryptParallelization: 1,
   scryptKeyLength: 32,
 };
+const fictionalP07Providers = {
+  consentProvider: {
+    getCurrentConsent: async () => ({
+      version: 'consent-v1',
+      content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL PLAN TEST CONSENT' },
+    }),
+  },
+  screeningProvider: { isApprovedConclusion: async () => true },
+  profileSchemaProvider: {
+    getApprovedProfileSchema: async () => ({
+      version: 'plan-fixture-profile-v1',
+      steps: [{ id: 'fixture-ready', fields: [{ name: 'fixtureReady', type: 'BOOLEAN' as const, required: true }] }],
+    }),
+  },
+};
+
+function buildApplication(environment: Environment, options: Parameters<typeof buildTestApplication>[1] = {}) {
+  return buildTestApplication(environment, { ...fictionalP07Providers, ...options });
+}
 let tokens = new Map<string, string>();
 let planUsers = new Map<string, string>();
 
@@ -76,7 +95,7 @@ describe('plan lifecycle HTTP API', () => {
       `SELECT action, outcome FROM audit.audit_event WHERE request_id='persistent-create-plan'`,
     );
     expect(audit.rows).toEqual([{ action: 'PLAN_VERSION_CREATED', outcome: 'SUCCEEDED' }]);
-  });
+  }, 15_000);
 
   it('ignores backdated and future-dated lifecycle times in public transition bodies', async () => {
     let trustedNow = new Date(publishAt);
@@ -674,25 +693,25 @@ describe('plan lifecycle HTTP API', () => {
     )).rows).toEqual(before.rows);
   });
 
-  it('blocks publication when professional rules remain unapproved', async () => {
+  it('blocks plan creation before publication when professional rules remain unapproved', async () => {
     app = await buildApplication({
       ...approvedEnvironment,
       professionalRulesApproved: false,
     }, { authPolicy: policy });
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
-    await prepareReviewed(agent, 'plan-blocked', 'user-4');
-
-    const response = await agent
-      .post('/api/v1/plan-versions/plan-blocked/transitions')
-      .set(writeHeaders('publish-plan-blocked')).set('Authorization', `Bearer ${tokens.get('operations')}`)
-      .send({ type: 'PUBLISH', occurredAt: publishAt })
+    const response = await agent.post('/api/v1/plan-versions')
+      .set(writeHeaders('create-plan-blocked')).set('Authorization', `Bearer ${tokens.get('operations')}`)
+      .send({ id: 'plan-blocked', userId: 'user-4', effectiveAt, effectiveTo, contentMode: 'REVIEWED' })
       .expect(409);
     expect(response.body).toMatchObject({
-      businessStatus: 'PUBLICATION_BLOCKED',
-      errorCode: 'PROFESSIONAL_RULES_UNAPPROVED',
-      recoverableActions: ['WAIT_FOR_PROFESSIONAL_APPROVAL'],
+      businessStatus: 'PLAN_CREATION_BLOCKED',
+      errorCode: 'ONBOARDING_NOT_READY',
+      recoverableActions: ['COMPLETE_ONBOARDING'],
     });
+    expect((await app.get(DatabaseService).database.query(
+      `SELECT count(*)::int AS count FROM planning.plan_version WHERE id='plan-blocked'`,
+    )).rows).toEqual([{ count: 0 }]);
   });
 
   it('allows a draft without an end but blocks publication until the window is finite', async () => {
@@ -717,6 +736,99 @@ describe('plan lifecycle HTTP API', () => {
         businessStatus: 'PLAN_VERSION_INVALID',
         errorCode: 'EFFECTIVE_TO_REQUIRED',
       }));
+  });
+
+  it('rechecks onboarding readiness before publishing after screening falls back', async () => {
+    app = await buildApplication(approvedEnvironment, { authPolicy: policy, planClock: { now: () => new Date(publishAt) } } as any);
+    const agent = request(app.getHttpServer());
+    await seedPlanFixture(app, agent);
+    await prepareReviewed(agent, 'screening-fallback-publish', 'user-1');
+    await app.get(DatabaseService).database.query(
+      `INSERT INTO care.screening_result
+         (id,user_id,conclusion,source,rule_version,recorded_by,actor_role,created_at)
+       VALUES ('screening-fallback','user-1','HUMAN_REVIEW','MANUAL_REVIEW','fictional-plan-rule-v2','nutrition','NUTRITION_REVIEWER',now()+interval '1 second')`,
+    );
+    await agent.post('/api/v1/plan-versions/screening-fallback-publish/transitions')
+      .set(writeHeaders('screening-fallback-publish-request'))
+      .set('Authorization', `Bearer ${tokens.get('operations')}`)
+      .send({ type: 'PUBLISH' }).expect(409)
+      .expect(({ body }) => expect(body.errorCode).toBe('ONBOARDING_NOT_READY'));
+
+    const state = await app.get(DatabaseService).database.query<{ status: string; idempotency: number }>(`
+      SELECT status,
+        (SELECT count(*)::int FROM audit.idempotency_key WHERE key='screening-fallback-publish-request') AS idempotency
+      FROM planning.plan_version WHERE id='screening-fallback-publish'
+    `);
+    expect(state.rows[0]).toEqual({ status: 'READY_TO_PUBLISH', idempotency: 0 });
+  });
+
+  it('serializes publishing behind a winning screening fallback transaction', async () => {
+    app = await buildApplication(approvedEnvironment, { authPolicy: policy, planClock: { now: () => new Date(publishAt) } } as any);
+    const agent = request(app.getHttpServer());
+    await seedPlanFixture(app, agent);
+    await prepareReviewed(agent, 'screening-race-publish', 'user-1');
+    const database = app.get(DatabaseService).database;
+    let releaseFallback!: () => void;
+    const fallbackRelease = new Promise<void>((resolve) => { releaseFallback = resolve; });
+    let fallbackLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { fallbackLocked = resolve; });
+    const fallback = database.transaction(async (tx) => {
+      await tx.query(`SELECT id FROM iam.account WHERE id='user-1' FOR UPDATE`);
+      await tx.query(
+        `INSERT INTO care.screening_result
+           (id,user_id,conclusion,source,rule_version,recorded_by,actor_role,created_at)
+         VALUES ('screening-race-fallback','user-1','EXCLUDED','MANUAL_REVIEW','fictional-plan-rule-v3','screening-reviewer','NUTRITION_REVIEWER',now()+interval '1 second')`,
+      );
+      fallbackLocked();
+      await fallbackRelease;
+    });
+    await locked;
+    let publishSettled = false;
+    const publish = agent.post('/api/v1/plan-versions/screening-race-publish/transitions')
+      .set(writeHeaders('screening-race-publish-request'))
+      .set('Authorization', `Bearer ${tokens.get('operations')}`)
+      .send({ type: 'PUBLISH' }).then((response) => { publishSettled = true; return response; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(publishSettled).toBe(false);
+    releaseFallback();
+    await fallback;
+    const response = await publish;
+    expect(response.status).toBe(409);
+    expect(response.body.errorCode).toBe('ONBOARDING_NOT_READY');
+    const state = await database.query<{ status: string; idempotency: number }>(`
+      SELECT status,
+        (SELECT count(*)::int FROM audit.idempotency_key WHERE key='screening-race-publish-request') AS idempotency
+      FROM planning.plan_version WHERE id='screening-race-publish'
+    `);
+    expect(state.rows[0]).toEqual({ status: 'READY_TO_PUBLISH', idempotency: 0 });
+  });
+
+  it('serializes screening HTTP writes on the same user lock', async () => {
+    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const agent = request(app.getHttpServer());
+    await seedPlanFixture(app, agent);
+    const database = app.get(DatabaseService).database;
+    let release!: () => void;
+    const releaseLock = new Promise<void>((resolve) => { release = resolve; });
+    let locked!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = database.transaction(async (tx) => {
+      await tx.query(`SELECT id FROM iam.account WHERE id='user-1' FOR UPDATE`);
+      locked();
+      await releaseLock;
+    });
+    await lockAcquired;
+    let screeningSettled = false;
+    const screening = agent.post('/api/v1/onboarding/screening-results')
+      .set(writeHeaders('serialized-screening-write'))
+      .set('Authorization', `Bearer ${tokens.get('nutrition')}`)
+      .send({ userId: 'user-1', conclusion: 'HUMAN_REVIEW', source: 'MANUAL_REVIEW', ruleVersion: 'fictional-plan-rule-v4' })
+      .then((response) => { screeningSettled = true; return response; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screeningSettled).toBe(false);
+    release();
+    await holder;
+    expect((await screening).status).toBe(201);
   });
 
   it('blocks a second pending version for the same user', async () => {
@@ -1137,6 +1249,7 @@ async function seedPlanFixture(
     ['operations', 'STAFF', 'OPERATIONS'],
     ['nutrition', 'STAFF', 'NUTRITION_REVIEWER'],
     ['training', 'STAFF', 'TRAINING_REVIEWER'],
+    ['screening-reviewer', 'STAFF', 'NUTRITION_REVIEWER'],
     ['user-1', 'USER', null], ['user-2', 'USER', null], ['user-3', 'USER', null],
     ['user-4', 'USER', null], ['user-5', 'USER', null], ['user-6', 'USER', null],
     ['persona_fat_loss', 'USER', null], ['persona_muscle_gain', 'USER', null],
@@ -1154,6 +1267,31 @@ async function seedPlanFixture(
     await database.query(
       `UPDATE iam.account_role SET qualified_at=now()
        WHERE account_id IN ('nutrition', 'training')`,
+    );
+  }
+  await database.query(
+    `UPDATE iam.account_role SET qualified_at=now() WHERE account_id='screening-reviewer'`,
+  );
+  for (const userId of [
+    'user-1', 'user-2', 'user-3', 'user-4', 'user-5', 'user-6',
+    'persona_fat_loss', 'persona_muscle_gain',
+  ]) {
+    await database.query(
+      `INSERT INTO care.consent_record (id, user_id, consent_version, accepted_at)
+       VALUES ($1, $2, 'consent-v1', now())`,
+      [`consent-${userId}`, userId],
+    );
+    await database.query(
+      `INSERT INTO care.screening_result
+         (id, user_id, conclusion, source, rule_version, recorded_by, actor_role)
+       VALUES ($1, $2, 'PASS', 'MANUAL_REVIEW', 'fictional-plan-rule-v1', 'screening-reviewer', 'NUTRITION_REVIEWER')`,
+      [`screening-${userId}`, userId],
+    );
+    await database.query(
+      `INSERT INTO care.user_profile
+         (id, user_id, profile_data, completed_steps, schema_version)
+       VALUES ($1, $2, '{"fixture-ready":{"fixtureReady":true}}', '["fixture-ready"]', 'plan-fixture-profile-v1')`,
+      [`profile-${userId}`, userId],
     );
   }
   for (const [id, kind, role] of [

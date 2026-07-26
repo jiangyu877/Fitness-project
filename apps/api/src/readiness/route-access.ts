@@ -16,6 +16,9 @@ export function createRouteAccessSnapshot(input: {
   mfaVerifierAvailable: boolean;
   hmacKeyAvailable: boolean;
   currentConsentVersionAvailable: boolean;
+  approvedConsentProviderAvailable?: boolean;
+  screeningApprovalProviderAvailable?: boolean;
+  profileSchemaProviderAvailable?: boolean;
 }): RouteAccessSnapshot {
   const blockers = readinessBlockers(input.environment);
   if (!input.authPolicyAvailable) blockers.push('AUTH_POLICY_PROVIDER_UNAVAILABLE');
@@ -23,6 +26,9 @@ export function createRouteAccessSnapshot(input: {
   if (!input.mfaVerifierAvailable) blockers.push('MFA_VERIFIER_UNAVAILABLE');
   if (!input.hmacKeyAvailable) blockers.push('HMAC_KEY_UNAVAILABLE');
   if (!input.currentConsentVersionAvailable) blockers.push('CURRENT_CONSENT_VERSION_UNAVAILABLE');
+  if (!input.approvedConsentProviderAvailable) blockers.push('APPROVED_CONSENT_PROVIDER_UNAVAILABLE');
+  if (!input.screeningApprovalProviderAvailable) blockers.push('SCREENING_APPROVAL_PROVIDER_UNAVAILABLE');
+  if (!input.profileSchemaProviderAvailable) blockers.push('PROFILE_SCHEMA_PROVIDER_UNAVAILABLE');
   const isTestFixture = input.audience === 'TEST' && input.environment.nodeEnv === 'test';
   return Object.freeze({
     audience: input.audience,
@@ -61,8 +67,11 @@ export function isClassifiedProtectedRoute(method: string, path: string): boolea
     /^POST \/api\/v1\/identity\/session\/logout$/,
     /^POST \/api\/v1\/identity\/accounts\/[^/]+\/status$/,
     /^POST \/api\/v1\/onboarding\/consents$/,
+    /^GET \/api\/v1\/onboarding\/consents\/current$/,
     /^POST \/api\/v1\/onboarding\/consents\/[^/]+\/withdraw$/,
     /^PUT \/api\/v1\/onboarding\/profile\/steps\/[^/]+$/,
+    /^GET \/api\/v1\/onboarding\/profile$/,
+    /^GET \/api\/v1\/onboarding\/screening-status$/,
     /^POST \/api\/v1\/onboarding\/screening-results$/,
     /^POST \/api\/v1\/plan-versions$/,
     /^GET \/api\/v1\/plan-versions\/[^/]+$/,

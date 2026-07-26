@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 
-import { buildApplication } from './build-test-application.js';
+import { buildApplication as buildTestApplication } from './build-test-application.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import type { MfaVerifier } from '../src/identity/mfa-verifier.js';
@@ -37,6 +37,14 @@ const policy: AuthSecurityPolicy = {
   scryptKeyLength: 32,
 };
 const profileFingerprintSecret = 'test-only-profile-idempotency-secret';
+const fictionalP07Providers = {
+  consentProvider: { getCurrentConsent: async () => ({ version: 'consent-v1', content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL TEST CONSENT' } }) },
+  screeningProvider: { isApprovedConclusion: async () => true },
+  profileSchemaProvider: { getApprovedProfileSchema: async () => ({ version: 'profile-test-v1', steps: [{ id: 'basics', fields: [] }] }) },
+};
+function buildApplication(environment: Environment, options: Parameters<typeof buildTestApplication>[1] = {}) {
+  return buildTestApplication(environment, { ...fictionalP07Providers, ...options });
+}
 
 describe('identity security hardening', () => {
   let app: INestApplication | undefined;
@@ -234,7 +242,7 @@ describe('identity security hardening', () => {
 
     await agent.put('/api/v1/onboarding/profile/steps/basics')
       .set(writeHeaders('shared-key')).set('Authorization', `Bearer ${token1}`)
-      .send({ expectedVersion: 0, data: {} }).expect(409);
+      .send({ expectedVersion: 0, data: {} }).expect(503);
     await agent.post('/api/v1/onboarding/consents')
       .set(writeHeaders('shared-key')).set('Authorization', `Bearer ${token2}`)
       .send({ consentVersion: 'consent-v1' }).expect(409);
@@ -795,7 +803,7 @@ describe('identity security hardening', () => {
     }
   });
 
-  it('uses only the explicit profile idempotency projection, never arbitrary profile values', async () => {
+  it('does not create an idempotency projection for unapproved arbitrary profile values', async () => {
     app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
     await seedActiveUser(app, 'profile-fingerprint-user');
     const agent = request(app.getHttpServer());
@@ -808,24 +816,15 @@ describe('identity security hardening', () => {
         expectedVersion: 0,
         data: { arbitrarySensitiveField: sensitiveValue },
       })
-      .expect(200);
+      .expect(503);
 
     const row = await app.get(DatabaseService).database.query<{ request_fingerprint: string }>(
       `SELECT request_fingerprint FROM audit.idempotency_key WHERE key='profile-fingerprint-save'`,
     );
-    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
-      step: 'basics',
-      expectedVersion: 0,
-    })));
-    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
-      step: 'basics',
-      expectedVersion: 0,
-      data: { arbitrarySensitiveField: sensitiveValue },
-    })));
-    expect(row.rows[0]?.request_fingerprint).not.toBe(sha256(sensitiveValue));
+    expect(row.rows).toEqual([]);
   });
 
-  it('rejects profile idempotency reuse for different data without persisting profile values in the fingerprint', async () => {
+  it('rejects unapproved profile values before idempotency persistence', async () => {
     app = await buildApplication(environment, { authPolicy: policy, profileFingerprintSecret });
     await seedActiveUser(app, 'profile-conflict-user');
     const agent = request(app.getHttpServer());
@@ -836,25 +835,21 @@ describe('identity security hardening', () => {
     await agent.put('/api/v1/onboarding/profile/steps/basics')
       .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
       .send({ expectedVersion: 0, data: firstData })
-      .expect(200);
+      .expect(503);
     await agent.put('/api/v1/onboarding/profile/steps/basics')
       .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
       .send({ expectedVersion: 0, data: firstData })
-      .expect(200);
+      .expect(503);
     await agent.put('/api/v1/onboarding/profile/steps/basics')
       .set(writeHeaders('profile-conflict-save')).set('Authorization', `Bearer ${token}`)
       .send({ expectedVersion: 0, data: changedData })
-      .expect(409)
-      .expect(({ body }) => expect(body.errorCode).toBe('IDEMPOTENCY_KEY_REUSED'));
+      .expect(503)
+      .expect(({ body }) => expect(body.errorCode).toBe('PROFILE_ACCESS_NOT_APPROVED'));
 
     const stored = await app.get(DatabaseService).database.query<{ request_fingerprint: string }>(
       `SELECT request_fingerprint FROM audit.idempotency_key WHERE key='profile-conflict-save'`,
     );
-    expect(stored.rows[0]?.request_fingerprint).not.toContain(firstData.healthValue);
-    expect(stored.rows[0]?.request_fingerprint).not.toContain(changedData.healthValue);
-    expect(stored.rows[0]?.request_fingerprint).not.toBe(sha256(JSON.stringify({
-      step: 'basics', expectedVersion: 0, data: firstData,
-    })));
+    expect(stored.rows).toEqual([]);
   });
 
   it('audits an initial password version conflict without retaining idempotency state', async () => {
