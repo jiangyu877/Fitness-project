@@ -78,6 +78,8 @@ export function isClassifiedProtectedRoute(method: string, path: string): boolea
     /^POST \/api\/v1\/plan-versions\/[^/]+\/transitions$/,
     /^GET \/api\/v1\/users\/[^/]+\/plans\/(current|history|pending)$/,
     /^GET \/api\/v1\/users\/[^/]+\/task-candidates$/,
+    /^GET \/api\/v1\/record-tasks\/[^/]+\/context$/,
+    /^POST \/api\/v1\/record-tasks\/[^/]+\/commands$/,
   ];
   return known.some((rule) => rule.test(`${method.toUpperCase()} ${path}`));
 }

@@ -38,7 +38,9 @@ import { createPlanClient, type PlanClient, type PlanSession } from '../features
 import { RealPlanPage, type RealPlanPageKind } from '../features/plans-real/real-plan-page.js';
 import { createP07Client, type P07Client, type P07NextAction } from '../features/p07-real/p07-client.js';
 import { P07Page } from '../features/p07-real/p07-page.js';
-import { resolveRoute } from './routing.js';
+import { createP11Client, type P11Client } from '../features/p11-real/p11-client.js';
+import { P11RecordPage, P11RecordTestOnlyBlockedPage } from '../features/p11-real/p11-record-page.js';
+import { resolveP11RecordRoute, resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
   const persona = demoPersonas[0];
@@ -56,6 +58,7 @@ const runtimeDemoEnvironment: DemoRuntimeEnvironment = {
 };
 const defaultPlanClient = createPlanClient();
 const defaultP07Client = createP07Client();
+const defaultP11Client = createP11Client();
 const DevelopmentPersonaSwitcher = import.meta.env.DEV
   ? React.lazy(() => import('./development-persona-switcher.js'))
   : null;
@@ -321,13 +324,14 @@ function GenericPage({ page }: { page: PageDefinition }) {
   );
 }
 
-export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient; p07Client?: P07Client };
+export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient; p07Client?: P07Client; p11Client?: P11Client };
 
-export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient, p07Client = defaultP07Client }: AppRoutesProps) {
+export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient, p07Client = defaultP07Client, p11Client = defaultP11Client }: AppRoutesProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const page = resolveRoute(location.pathname);
   const detailVersion = planDetailVersion(location.pathname);
+  const p11RecordRoute = resolveP11RecordRoute(location.pathname, location.search);
   const [recoveryPending, setRecoveryPending] = useState(() => identityClient.hasStoredSession());
   const [recoveryError, setRecoveryError] = useState<IdentityError>();
   const [restoredSession, setRestoredSession] = useState<RestoredUserSession>();
@@ -338,7 +342,7 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
     await identityClient.restoreSession().then((session) => {
       if (session) {
         setRestoredSession(session);
-        if (!location.pathname.startsWith('/h5/plans/')) {
+        if (!location.pathname.startsWith('/h5/plans/') && !p11RecordRoute) {
           navigate(pathForNextAction(session.nextAction), { replace: true });
         }
       }
@@ -373,6 +377,13 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
       : <IdentityNextActionPage nextAction={identityAction} />}</main></div>;
   }
   if (location.pathname === '/h5/contact-operations') return <div className="h5-viewport"><main className="h5-main"><AuthOnboardingPage kind="contact-operations" identityClient={identityClient} /></main></div>;
+  if (p11RecordRoute) {
+    if (demoEnvironment.mode !== 'test') {
+      return <div className="h5-viewport"><main className="h5-main"><P11RecordTestOnlyBlockedPage /></main></div>;
+    }
+    const p11Session = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
+    return <div className="h5-viewport"><main className="h5-main"><P11RecordPage taskId={p11RecordRoute.taskId ?? ''} session={p11Session} client={p11Client} /></main></div>;
+  }
   if (detailVersion) {
     const planSession = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
     return <div className="h5-viewport"><main className="h5-main"><RealPlanPage kind="detail" planVersionId={detailVersion} session={planSession} client={planClient} /></main></div>;

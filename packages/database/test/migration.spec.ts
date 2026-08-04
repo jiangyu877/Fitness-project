@@ -363,6 +363,56 @@ describe('core database migration', () => {
       `UPDATE care.user_profile SET schema_version='' WHERE id='legacy-profile'`,
     )).rejects.toThrow();
   });
+
+  it('adds the isolated P11 record persistence model in append-only migration 011', async () => {
+    database = new PGlite();
+    await applyMigrationsThrough(database, '010_p07_safe_structure');
+
+    await applyMigrationsThrough(database, '011_p11_record_persistence');
+
+    const tables = await database.query<{ table_name: string }>(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema='recording'
+      ORDER BY table_name
+    `);
+    expect(tables.rows.map((row) => row.table_name)).toEqual([
+      'p11_write_gate',
+      'p11_write_gate_revision',
+      'record',
+      'record_idempotency',
+      'record_success_audit',
+      'record_task',
+    ]);
+
+    const taskColumns = await database.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='recording' AND table_name='record_task'
+      ORDER BY column_name
+    `);
+    expect(taskColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining(['gate_id', 'gate_revision']),
+    );
+
+    const idempotencyColumns = await database.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='recording' AND table_name='record_idempotency'
+      ORDER BY column_name
+    `);
+    expect(idempotencyColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'idempotency_key_digest',
+        'intent_digest',
+        'key_id',
+        'replay_result',
+      ]),
+    );
+    expect(idempotencyColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['idempotency_key', 'canonical_intent', 'raw_entries']),
+    );
+  });
 });
 
 async function seedPlan(target: PGlite): Promise<void> {

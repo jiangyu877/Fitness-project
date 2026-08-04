@@ -1,5 +1,15 @@
-import type { PGlite } from '@electric-sql/pglite';
 import { readFile } from 'node:fs/promises';
+
+export type MigrationConnection = {
+  exec(sql: string): Promise<unknown>;
+  query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }>;
+};
+
+export type MigrationDatabase = MigrationConnection & {
+  transaction<Result>(
+    run: (connection: MigrationConnection) => Promise<Result>,
+  ): Promise<Result>;
+};
 
 const migrations = [
   {
@@ -42,15 +52,22 @@ const migrations = [
     version: '010_p07_safe_structure',
     file: '010_p07_safe_structure.sql',
   },
+  {
+    version: '011_p11_record_persistence',
+    file: '011_p11_record_persistence.sql',
+  },
 ] as const;
 
 export type MigrationVersion = (typeof migrations)[number]['version'];
 
-export async function applyMigrations(database: PGlite): Promise<void> {
+export async function applyMigrations(database: MigrationDatabase): Promise<void> {
   await applyMigrationsThrough(database, migrations.at(-1)!.version);
 }
 
-export async function applyMigrationsThrough(database: PGlite, targetVersion: MigrationVersion): Promise<void> {
+export async function applyMigrationsThrough(
+  database: MigrationDatabase,
+  targetVersion: MigrationVersion,
+): Promise<void> {
   await database.exec(`
     CREATE TABLE IF NOT EXISTS public.schema_migration (
       version text PRIMARY KEY,
@@ -71,18 +88,13 @@ export async function applyMigrationsThrough(database: PGlite, targetVersion: Mi
     }
 
     const sql = await readMigration(migration.file);
-    await database.exec('BEGIN');
-    try {
-      await database.exec(sql);
-      await database.query(
+    await database.transaction(async (transaction) => {
+      await transaction.exec(sql);
+      await transaction.query(
         'INSERT INTO public.schema_migration (version) VALUES ($1)',
         [migration.version],
       );
-      await database.exec('COMMIT');
-    } catch (error) {
-      await database.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
 }
 

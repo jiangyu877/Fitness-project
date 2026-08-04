@@ -12,6 +12,9 @@ import { ROUTE_ACCESS_SNAPSHOT, isClassifiedProtectedRoute, isProtectedRoute, ty
 import { DatabaseService } from './database/database.service.js';
 import { randomUUID } from 'node:crypto';
 import { ArgumentsHost, Catch, HttpException, type ExceptionFilter } from '@nestjs/common';
+import { freezeRecordSchema, validRecordSchema, type RecordSchemaProvider } from './records/p11-record-schema.provider.js';
+import type { P11RecordRepositoryPort } from './records/p11-record-repository.port.js';
+import type { P11RecordContextPort } from './records/p11-record-context.port.js';
 
 type MiddlewareRequest = {
   path: string;
@@ -21,14 +24,17 @@ type MiddlewareRequest = {
 type MiddlewareResponse = { status(statusCode: number): { json(body: unknown): void } };
 type MiddlewareNext = () => void;
 
-export async function buildApplication(environment: Environment, options?: { authPolicy?: AuthSecurityPolicy; mfaVerifier?: MfaVerifier; profileFingerprintSecret?: string; currentConsentVersion?: CurrentConsentVersionProvider; consentProvider?: CurrentConsentProvider; screeningProvider?: ScreeningApprovalProvider; profileSchemaProvider?: ProfileSchemaProvider; routeAccessSnapshot?: RouteAccessSnapshot; planClock?: PlanLifecycleClock }) {
+export async function buildApplication(environment: Environment, options?: { authPolicy?: AuthSecurityPolicy; mfaVerifier?: MfaVerifier; profileFingerprintSecret?: string; currentConsentVersion?: CurrentConsentVersionProvider; consentProvider?: CurrentConsentProvider; screeningProvider?: ScreeningApprovalProvider; profileSchemaProvider?: ProfileSchemaProvider; recordSchemaProvider?: RecordSchemaProvider; recordRepository?: P11RecordRepositoryPort; recordContext?: P11RecordContextPort; routeAccessSnapshot?: RouteAccessSnapshot; planClock?: PlanLifecycleClock }) {
   const consentProvider = await pinConsentProvider(environment, options?.consentProvider);
   const currentConsentVersion = consentProvider
     ? { getCurrentConsentVersion: async () => (await consentProvider.getCurrentConsent()).version }
     : await pinCurrentConsentVersion(options?.currentConsentVersion);
   const profileSchemaProvider = await pinProfileSchemaProvider(environment, options?.profileSchemaProvider);
+  const recordSchemaProvider = await pinRecordSchemaProvider(environment, options?.recordSchemaProvider);
   const screeningProvider = environment.nodeEnv === 'test' ? options?.screeningProvider ?? null : null;
-  const app = await NestFactory.create(AppModule.forEnvironment(environment, options?.authPolicy ?? null, options?.mfaVerifier ?? null, options?.profileFingerprintSecret ?? null, currentConsentVersion, options?.routeAccessSnapshot ?? null, options?.planClock, consentProvider, screeningProvider, profileSchemaProvider), {
+  const recordRepository = environment.nodeEnv === 'test' ? options?.recordRepository ?? null : null;
+  const recordContext = environment.nodeEnv === 'test' ? options?.recordContext ?? null : null;
+  const app = await NestFactory.create(AppModule.forEnvironment(environment, options?.authPolicy ?? null, options?.mfaVerifier ?? null, options?.profileFingerprintSecret ?? null, currentConsentVersion, options?.routeAccessSnapshot ?? null, options?.planClock, consentProvider, screeningProvider, profileSchemaProvider, recordSchemaProvider, recordRepository, recordContext), {
     logger: false,
   });
   app.useGlobalFilters(new StableSecurityErrorFilter(app.getHttpAdapter()));
@@ -52,6 +58,7 @@ export async function buildApplication(environment: Environment, options?: { aut
       businessStatus: 'IDENTITY_BLOCKED',
       errorCode: 'ROUTE_ACCESS_NOT_APPROVED',
       recoverableActions: ['WAIT_FOR_SECURITY_APPROVAL'],
+      clientStateDisposition: 'CLEAR_ALL',
       requestId,
     });
   });
@@ -91,6 +98,16 @@ async function pinProfileSchemaProvider(environment: Environment, provider?: Pro
   } catch { return null; }
 }
 
+async function pinRecordSchemaProvider(environment: Environment, provider?: RecordSchemaProvider): Promise<RecordSchemaProvider | null> {
+  if (environment.nodeEnv !== 'test' || !provider) return null;
+  try {
+    const schema = await provider.getApprovedRecordSchema();
+    if (!schema.testOnly || !validRecordSchema(schema)) return null;
+    const snapshot = freezeRecordSchema(schema);
+    return { getApprovedRecordSchema: async () => snapshot };
+  } catch { return null; }
+}
+
 @Catch(HttpException)
 export class StableSecurityErrorFilter extends BaseExceptionFilter implements ExceptionFilter {
   catch(exception: HttpException, host: ArgumentsHost): void {
@@ -120,6 +137,7 @@ export function normalizeStableSecurityError(
     businessStatus: value.businessStatus,
     errorCode: value.errorCode,
     recoverableActions: value.recoverableActions,
+    ...(typeof value.clientStateDisposition === 'string' ? { clientStateDisposition: value.clientStateDisposition } : {}),
     requestId: typeof value.requestId === 'string' ? value.requestId : fallbackRequestId,
   };
 }

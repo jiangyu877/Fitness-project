@@ -202,7 +202,9 @@ describe('phase 1 HTTP API contract', () => {
     await request(app.getHttpServer())[method](path)
       .set('x-request-id', `blocked-${_kind}`).set('idempotency-key', `blocked-${_kind}`)
       .send({}).expect(503)
-      .expect(({ body }) => expect(body.errorCode).toBe('ROUTE_ACCESS_NOT_APPROVED'));
+      .expect(({ body }) => expect(body).toMatchObject({
+        errorCode: 'ROUTE_ACCESS_NOT_APPROVED', clientStateDisposition: 'CLEAR_ALL',
+      }));
     expect(await businessSideEffectCounts(db)).toEqual(before);
     expect(await routeRejectionAudits(db, `blocked-${_kind}`)).toEqual([expect.objectContaining({
       actor_id: null, actor_role: 'SYSTEM', outcome: 'REJECTED', error_code: 'ROUTE_ACCESS_NOT_APPROVED',

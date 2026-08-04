@@ -14,6 +14,12 @@ import { MFA_VERIFIER, type MfaVerifier } from './identity/mfa-verifier.js';
 import { CURRENT_CONSENT_VERSION, type CurrentConsentVersionProvider } from './identity/current-consent-version.js';
 import { CURRENT_CONSENT, PROFILE_SCHEMA, SCREENING_APPROVAL, type CurrentConsentProvider, type ProfileSchemaProvider, type ScreeningApprovalProvider } from './identity/p07-providers.js';
 import { createRouteAccessSnapshot, ROUTE_ACCESS_SNAPSHOT, type RouteAccessSnapshot } from './readiness/route-access.js';
+import { RecordSafeStructureController } from './records/record-safe-structure.controller.js';
+import { RECORD_SCHEMA, type RecordSchemaProvider } from './records/p11-record-schema.provider.js';
+import { P11_RECORD_REPOSITORY } from './records/p11-record-repository.token.js';
+import type { P11RecordRepositoryPort } from './records/p11-record-repository.port.js';
+import { P11_RECORD_CONTEXT } from './records/p11-record-context.token.js';
+import type { P11RecordContextPort } from './records/p11-record-context.port.js';
 
 @Module({})
 export class AppModule {
@@ -28,9 +34,14 @@ export class AppModule {
     consentProvider: CurrentConsentProvider | null = null,
     screeningProvider: ScreeningApprovalProvider | null = null,
     profileSchemaProvider: ProfileSchemaProvider | null = null,
+    recordSchemaProvider: RecordSchemaProvider | null = null,
+    recordRepository: P11RecordRepositoryPort | null = null,
+    recordContext: P11RecordContextPort | null = null,
   ): DynamicModule {
     const pinnedAuthPolicy = authPolicy ? Object.freeze({ ...authPolicy }) : null;
     const injectedPlanClock = environment.nodeEnv === 'test' ? planClock : {};
+    const injectedRecordRepository = environment.nodeEnv === 'test' ? recordRepository : null;
+    const injectedRecordContext = environment.nodeEnv === 'test' ? recordContext : null;
     const injectedTestSnapshot = environment.nodeEnv === 'test' && routeAccessSnapshot?.audience === 'TEST'
       ? routeAccessSnapshot
       : null;
@@ -53,6 +64,7 @@ export class AppModule {
         HealthController,
         ReadinessController,
         PlanLifecycleController,
+        RecordSafeStructureController,
         IdentityOnboardingController,
         ...(environment.demoMode ? [DemoController] : []),
       ],
@@ -70,6 +82,9 @@ export class AppModule {
         { provide: CURRENT_CONSENT, useValue: consentProvider },
         { provide: SCREENING_APPROVAL, useValue: screeningProvider },
         { provide: PROFILE_SCHEMA, useValue: profileSchemaProvider },
+        { provide: RECORD_SCHEMA, useValue: recordSchemaProvider },
+        { provide: P11_RECORD_REPOSITORY, useValue: injectedRecordRepository },
+        { provide: P11_RECORD_CONTEXT, useValue: injectedRecordContext },
       ],
     };
   }

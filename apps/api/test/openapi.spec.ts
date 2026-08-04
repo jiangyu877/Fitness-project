@@ -256,4 +256,118 @@ describe('OpenAPI contract', () => {
     expect(serialized).not.toContain('changed-pass-1');
     expect(serialized).not.toMatch(/calorie|exercise|threshold|meal/i);
   });
+
+  it('publishes the P11 self-scoped record context contract', async () => {
+    app = await buildApplication({
+      nodeEnv: 'test', port: 3000, databasePath: 'memory://', demoMode: true,
+      professionalRulesApproved: false, authSecurityPolicyApproved: false,
+      privacyReviewApproved: false, dataRightsDrillComplete: false,
+      backupRestoreDrillComplete: false, operationsReadinessApproved: false,
+      deploymentSecurityApproved: false,
+    });
+
+    const document = createOpenApiDocument(app);
+    const operation = document.paths['/api/v1/record-tasks/{taskId}/context']?.get;
+    expect(operation, 'GET record context is not implemented yet').toBeDefined();
+    expect(operation?.security).toEqual(expect.arrayContaining([expect.objectContaining({ bearer: [] })]));
+    expect(operation?.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'taskId', in: 'path', required: true }),
+      expect.objectContaining({ name: 'x-request-id', in: 'header', required: true }),
+    ]));
+    const response = (operation?.responses?.['200'] as any)?.content?.['application/json']?.schema;
+    expect(response?.required).toEqual(expect.arrayContaining([
+      'businessStatus', 'taskId', 'planVersion', 'businessDate', 'accessMode', 'schema', 'records',
+    ]));
+    expect(response?.additionalProperties).toBe(false);
+    expect(response?.properties?.schema?.additionalProperties).toBe(false);
+    expect(response?.properties?.schema?.properties?.testOnly?.enum).toEqual([true]);
+    expect(response?.properties?.schema?.properties?.recordKinds?.items?.additionalProperties).toBe(false);
+    expect(response?.properties?.schema?.properties?.recordKinds?.items?.properties?.fields?.items?.additionalProperties).toBe(false);
+    expect(response?.properties?.records?.items?.additionalProperties).toBe(false);
+    expect(response?.properties?.records?.items?.properties?.entries?.items?.additionalProperties).toBe(false);
+    expect(JSON.stringify(response)).toContain('RECORD_CONTEXT_AVAILABLE');
+    expect(JSON.stringify(response)).toContain('READ_ONLY');
+    expect(JSON.stringify(response)).toContain('UPSERT_RECORD');
+    expect(JSON.stringify(response)).not.toMatch(/userId|clientNow|timeZone|closedByClient|goalType|persona/i);
+    expect(JSON.stringify(response)).not.toContain('approvedForRealUsers');
+    expect(JSON.stringify(response)).not.toMatch(/userId|role|clientNow|timeZone|risk|threshold|meal|exercise/i);
+    const context401 = (operation?.responses?.['401'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(context401)).toContain('SESSION_INVALID');
+    expect(JSON.stringify(context401)).toContain('CLEAR_ALL');
+    const context404 = (operation?.responses?.['404'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(context404)).toContain('RECORD_TASK_NOT_FOUND');
+    expect(JSON.stringify(context404)).toContain('CLEAR_ALL');
+    expect(context404?.properties).not.toHaveProperty('taskId');
+    expect(context404?.properties).not.toHaveProperty('planVersion');
+    expect(context404?.properties).not.toHaveProperty('records');
+    expect(context404?.properties).not.toHaveProperty('recordId');
+    expect(context404?.properties).not.toHaveProperty('ownerId');
+    const context503 = (operation?.responses?.['503'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(context503)).toContain('ROUTE_ACCESS_NOT_APPROVED');
+    expect(JSON.stringify(context503)).toContain('CLEAR_ALL');
+  });
+
+  it('publishes the P11 versioned command, idempotency, and concurrency contract', async () => {
+    app = await buildApplication({
+      nodeEnv: 'test', port: 3000, databasePath: 'memory://', demoMode: true,
+      professionalRulesApproved: false, authSecurityPolicyApproved: false,
+      privacyReviewApproved: false, dataRightsDrillComplete: false,
+      backupRestoreDrillComplete: false, operationsReadinessApproved: false,
+      deploymentSecurityApproved: false,
+    });
+
+    const document = createOpenApiDocument(app);
+    const operation = document.paths['/api/v1/record-tasks/{taskId}/commands']?.post;
+    expect(operation, 'POST record command is not implemented yet').toBeDefined();
+    expect(operation?.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'x-request-id', in: 'header', required: true }),
+      expect.objectContaining({ name: 'idempotency-key', in: 'header', required: true }),
+    ]));
+    const request = (operation?.requestBody as any)?.content?.['application/json']?.schema;
+    expect(request?.required).toEqual([
+      'operation', 'recordKindId', 'schemaVersion', 'expectedRecordVersion', 'entries',
+    ]);
+    expect(request?.additionalProperties).toBe(false);
+    expect(request?.properties?.operation?.enum).toEqual(['UPSERT_RECORD']);
+    expect(JSON.stringify(request)).not.toMatch(/userId|role|clientNow|timeZone|businessDate|planStatus|taskOwner|isClosed|riskStatus|approved/i);
+    const success = (operation?.responses?.['200'] as any)?.content?.['application/json']?.schema;
+    expect(success?.required).toEqual(expect.arrayContaining([
+      'businessStatus', 'recordVersion', 'schemaVersion', 'nextAction', 'recoverableActions',
+    ]));
+    expect(success?.properties?.nextAction?.enum).toEqual(['GET_RECORD_CONTEXT']);
+    expect(success?.properties?.recoverableActions?.maxItems).toBe(0);
+    const command401 = (operation?.responses?.['401'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(command401)).toContain('SESSION_INVALID');
+    expect(JSON.stringify(command401)).toContain('CLEAR_ALL');
+    const command404 = (operation?.responses?.['404'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(command404)).toContain('RECORD_TASK_NOT_FOUND');
+    expect(JSON.stringify(command404)).toContain('CLEAR_ALL');
+    expect(command404?.properties).not.toHaveProperty('taskId');
+    expect(command404?.properties).not.toHaveProperty('planVersion');
+    expect(command404?.properties).not.toHaveProperty('records');
+    expect(command404?.properties).not.toHaveProperty('recordId');
+    expect(command404?.properties).not.toHaveProperty('ownerId');
+    const command503 = (operation?.responses?.['503'] as any)?.content?.['application/json']?.schema;
+    expect(JSON.stringify(command503)).toContain('ROUTE_ACCESS_NOT_APPROVED');
+    expect(JSON.stringify(command503)).toContain('CLEAR_ALL');
+    const conflicts = JSON.stringify(operation?.responses?.['409']);
+    expect(conflicts).toContain('RECORD_VERSION_CONFLICT');
+    expect(conflicts).toContain('RECORD_SCHEMA_VERSION_CONFLICT');
+    expect(conflicts).toContain('IDEMPOTENCY_KEY_REUSED');
+  });
+
+  it('publishes P11 version-conflict draft preservation', async () => {
+    app = await buildApplication({
+      nodeEnv: 'test', port: 3000, databasePath: 'memory://', demoMode: true,
+      professionalRulesApproved: false, authSecurityPolicyApproved: false,
+      privacyReviewApproved: false, dataRightsDrillComplete: false,
+      backupRestoreDrillComplete: false, operationsReadinessApproved: false,
+      deploymentSecurityApproved: false,
+    });
+
+    const document = createOpenApiDocument(app);
+    const command = document.paths['/api/v1/record-tasks/{taskId}/commands']?.post;
+    const versionConflict = JSON.stringify(command?.responses?.['409'] ?? {});
+    expect(versionConflict).toContain('PRESERVE_DRAFT_FOR_VERSION_CONFLICT');
+  });
 });

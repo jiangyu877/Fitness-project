@@ -1,0 +1,1 @@
+export const P11_RECORD_CONTEXT = Symbol('P11_RECORD_CONTEXT');

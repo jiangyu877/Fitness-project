@@ -1,0 +1,1 @@
+export const P11_RECORD_REPOSITORY = Symbol('P11_RECORD_REPOSITORY');
