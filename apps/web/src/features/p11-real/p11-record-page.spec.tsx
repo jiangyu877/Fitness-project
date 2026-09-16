@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -136,5 +136,180 @@ describe('P11 GET_RECORD_CONTEXT page consumer', () => {
     expect(getContext).not.toHaveBeenCalled();
     expect(screen.queryByTestId('p11-record-context')).not.toBeInTheDocument();
     expect(screen.queryByText('仅用于原型演示，未经专业审核')).not.toBeInTheDocument();
+  });
+
+  it('submits schema-driven primitive input and waits for an authoritative reread', async () => {
+    const editableContext = {
+      ...context,
+      schema: {
+        ...context.schema,
+        recordKinds: [{
+          id: 'kind-opaque',
+          fields: [{ id: 'field-1', valueType: 'STRING' as const, required: true }],
+          allowedActions: ['UPSERT_RECORD' as const],
+        }],
+      },
+    };
+    const refreshedContext = {
+      ...editableContext,
+      records: [{
+        recordId: 'record-opaque', recordKindId: 'kind-opaque', recordVersion: 1,
+        schemaVersion: 'schema-test-v1', entries: [{ fieldId: 'field-1', value: 'opaque-entry' }],
+      }],
+    };
+    const getContext = vi.fn()
+      .mockResolvedValueOnce(editableContext)
+      .mockResolvedValueOnce(refreshedContext);
+    const upsertRecord = vi.fn().mockResolvedValue({
+      businessStatus: 'RECORD_WRITE_ACCEPTED', recordVersion: 1,
+      schemaVersion: 'schema-test-v1', nextAction: 'GET_RECORD_CONTEXT', recoverableActions: [],
+    });
+    const client = { getContext, upsertRecord } as unknown as P11Client;
+
+    render(<MemoryRouter><P11RecordPage taskId="task-opaque" session={session} client={client} /></MemoryRouter>);
+
+    const input = await screen.findByLabelText('field-1');
+    fireEvent.change(input, { target: { value: 'opaque-entry' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交测试记录' }));
+
+    await waitFor(() => expect(upsertRecord).toHaveBeenCalledWith(session, 'task-opaque', {
+      operation: 'UPSERT_RECORD', recordKindId: 'kind-opaque', schemaVersion: 'schema-test-v1',
+      expectedRecordVersion: null, entries: [{ fieldId: 'field-1', value: 'opaque-entry' }],
+    }));
+    await waitFor(() => expect(getContext).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('p11-record-write-status')).toHaveTextContent('RECORD_CONTEXT_REFRESHED');
+    expect(screen.getByTestId('p11-context-record-count')).toHaveTextContent('1');
+  });
+
+  it('allows an optional string field to submit an empty primitive value', async () => {
+    const optionalContext = {
+      ...context,
+      schema: {
+        ...context.schema,
+        recordKinds: [{
+          id: 'kind-opaque',
+          fields: [{ id: 'field-1', valueType: 'STRING' as const }],
+          allowedActions: ['UPSERT_RECORD' as const],
+        }],
+      },
+    };
+    const getContext = vi.fn().mockResolvedValue(optionalContext);
+    const upsertRecord = vi.fn().mockResolvedValue({
+      businessStatus: 'RECORD_WRITE_ACCEPTED', recordVersion: 1,
+      schemaVersion: 'schema-test-v1', nextAction: 'GET_RECORD_CONTEXT', recoverableActions: [],
+    });
+    const client = { getContext, upsertRecord } as unknown as P11Client;
+
+    render(<MemoryRouter><P11RecordPage taskId="task-opaque" session={session} client={client} /></MemoryRouter>);
+
+    await screen.findByLabelText('field-1');
+    const submit = screen.getByRole('button', { name: '提交测试记录' });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(upsertRecord).toHaveBeenCalledWith(session, 'task-opaque', {
+      operation: 'UPSERT_RECORD', recordKindId: 'kind-opaque', schemaVersion: 'schema-test-v1',
+      expectedRecordVersion: null, entries: [{ fieldId: 'field-1', value: '' }],
+    }));
+  });
+
+  it('fails closed when the post-write authoritative context does not match the command target', async () => {
+    const editableContext = {
+      ...context,
+      schema: {
+        ...context.schema,
+        recordKinds: [{
+          id: 'kind-opaque',
+          fields: [{ id: 'field-1', valueType: 'STRING' as const, required: true }],
+          allowedActions: ['UPSERT_RECORD' as const],
+        }],
+      },
+    };
+    const mismatchedContext = { ...editableContext, taskId: 'other-task' };
+    const getContext = vi.fn().mockResolvedValueOnce(editableContext).mockResolvedValueOnce(mismatchedContext);
+    const upsertRecord = vi.fn().mockResolvedValue({
+      businessStatus: 'RECORD_WRITE_ACCEPTED', recordVersion: 1,
+      schemaVersion: 'schema-test-v1', nextAction: 'GET_RECORD_CONTEXT', recoverableActions: [],
+    });
+    const client = { getContext, upsertRecord } as unknown as P11Client;
+
+    render(<MemoryRouter><P11RecordPage taskId="task-opaque" session={session} client={client} /></MemoryRouter>);
+
+    fireEvent.change(await screen.findByLabelText('field-1'), { target: { value: 'opaque-entry' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交测试记录' }));
+    expect(await screen.findByTestId('p11-record-context-blocked')).toBeInTheDocument();
+    expect(screen.getByTestId('p11-context-error-code')).toHaveTextContent('RECORD_RESPONSE_INVALID');
+    expect(screen.queryByTestId('p11-record-write-status')).not.toBeInTheDocument();
+    expect(getContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the authoritative record and disables the editor for a state-blocked write', async () => {
+    const blockedContext = {
+      ...context,
+      schema: {
+        ...context.schema,
+        recordKinds: [{
+          id: 'kind-opaque',
+          fields: [{ id: 'field-1', valueType: 'STRING' as const, required: true }],
+          allowedActions: ['UPSERT_RECORD' as const],
+        }],
+      },
+      records: [{
+        recordId: 'record-opaque', recordKindId: 'kind-opaque', recordVersion: 1,
+        schemaVersion: 'schema-test-v1', entries: [{ fieldId: 'field-1', value: 'existing-entry' }],
+      }],
+    };
+    const getContext = vi.fn().mockResolvedValue(blockedContext);
+    const upsertRecord = vi.fn().mockRejectedValue(new P11ClientError(
+      'blocked', 409, 'RECORD_STATE_BLOCKED', [], 'request-1', 'DISABLE_EDITOR',
+    ));
+    const client = { getContext, upsertRecord } as unknown as P11Client;
+
+    render(<MemoryRouter><P11RecordPage taskId="task-opaque" session={session} client={client} /></MemoryRouter>);
+
+    const input = await screen.findByLabelText('field-1');
+    fireEvent.change(input, { target: { value: 'rejected-local-draft' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交测试记录' }));
+    expect(await screen.findByTestId('p11-context-inline-error')).toBeInTheDocument();
+    expect(screen.getByTestId('p11-context-error-code')).toHaveTextContent('RECORD_STATE_BLOCKED');
+    expect(screen.getByTestId('p11-context-record-count')).toHaveTextContent('1');
+    expect(input).toHaveValue('existing-entry');
+    expect(input).toBeDisabled();
+  });
+
+  it('fails closed when write success and reread drift from the submitted schema', async () => {
+    const editableContext = {
+      ...context,
+      schema: {
+        ...context.schema,
+        recordKinds: [{
+          id: 'kind-opaque',
+          fields: [{ id: 'field-1', valueType: 'STRING' as const, required: true }],
+          allowedActions: ['UPSERT_RECORD' as const],
+        }],
+      },
+    };
+    const driftedContext = {
+      ...editableContext,
+      schema: { ...editableContext.schema, version: 'schema-test-v2' },
+      records: [{
+        recordId: 'record-opaque', recordKindId: 'kind-opaque', recordVersion: 1,
+        schemaVersion: 'schema-test-v2', entries: [{ fieldId: 'field-1', value: 'opaque-entry' }],
+      }],
+    };
+    const getContext = vi.fn().mockResolvedValueOnce(editableContext).mockResolvedValueOnce(driftedContext);
+    const upsertRecord = vi.fn().mockResolvedValue({
+      businessStatus: 'RECORD_WRITE_ACCEPTED', recordVersion: 1,
+      schemaVersion: 'schema-test-v2', nextAction: 'GET_RECORD_CONTEXT', recoverableActions: [],
+    });
+    const client = { getContext, upsertRecord } as unknown as P11Client;
+
+    render(<MemoryRouter><P11RecordPage taskId="task-opaque" session={session} client={client} /></MemoryRouter>);
+
+    fireEvent.change(await screen.findByLabelText('field-1'), { target: { value: 'opaque-entry' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交测试记录' }));
+
+    expect(await screen.findByTestId('p11-record-context-blocked')).toBeInTheDocument();
+    expect(screen.getByTestId('p11-context-error-code')).toHaveTextContent('RECORD_RESPONSE_INVALID');
+    expect(screen.queryByTestId('p11-record-write-status')).not.toBeInTheDocument();
   });
 });

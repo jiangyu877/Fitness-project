@@ -27,6 +27,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { P11RecordRepositoryError } from '@lianban/database';
 import { z } from 'zod';
 import { RECORD_SCHEMA, type RecordSchemaProvider } from './p11-record-schema.provider.js';
 import { IdentityOnboardingService } from '../identity/identity-onboarding.service.js';
@@ -196,7 +197,33 @@ export class RecordSafeStructureController {
       requestId: requiredText(requestId),
       nodeEnv: 'test',
     });
-    const result = await this.recordContext.getContext(input, schema);
+    let result: P11RecordContextResult;
+    try {
+      result = await this.recordContext.getContext(input, schema);
+    } catch (error) {
+      if (error instanceof P11RecordRepositoryError) {
+        if (error.code === 'RECORD_TASK_NOT_FOUND') throw this.taskNotFound(requestId);
+        if (error.code === 'SESSION_INVALID') {
+          throw new UnauthorizedException(this.error('SESSION_INVALID', requestId));
+        }
+        if (error.code === 'RECORD_SCHEMA_VERSION_CONFLICT') {
+          throw new ConflictException(this.error('RECORD_SCHEMA_VERSION_CONFLICT', requestId, ['REFRESH']));
+        }
+        if (error.code === 'RECORD_STATE_BLOCKED') {
+          throw new ConflictException(this.error('RECORD_STATE_BLOCKED', requestId, [], 'DISABLE_EDITOR'));
+        }
+        if (error.code === 'RECORD_PLAN_NOT_ACTIVE') {
+          throw new ConflictException(this.error('RECORD_PLAN_NOT_ACTIVE', requestId));
+        }
+        if (error.code === 'RECORD_SCHEMA_INVALID') {
+          throw new ServiceUnavailableException(this.error('RECORD_SCHEMA_INVALID', requestId, ['CONTACT_OPERATIONS']));
+        }
+        if (error.code === 'RECORD_REQUEST_INVALID') {
+          throw new BadRequestException(this.error('RECORD_REQUEST_INVALID', requestId));
+        }
+      }
+      throw this.endpointUnavailable(requestId);
+    }
     return contextResponse(result, schema);
   }
 
@@ -489,7 +516,7 @@ function contextResponse(
           valueType: field.valueType,
           ...(field.required === undefined ? {} : { required: field.required }),
         })),
-        allowedActions: kind.allowedActions,
+        allowedActions: result.accessMode === 'READ_ONLY' ? [] : kind.allowedActions,
       })),
     },
     records: result.records.map((record) => ({

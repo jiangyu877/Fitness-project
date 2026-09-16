@@ -34,6 +34,21 @@ The Phase 1 endpoints are:
 
 Demo routes are not registered when `DEMO_MODE=false`. Demo responses always carry the unreviewed-demo disclaimer and cannot be published.
 
+## P11 Local Test-Only Runtime
+
+With a local PostgreSQL 18 administrator database listening on loopback, the
+schema-driven dual-fixture record path can be exercised in the browser:
+
+```powershell
+$env:P11_LOCAL_POSTGRES_ADMIN_URL='postgresql://postgres@127.0.0.1:5433/postgres'
+npm run dev:p11-local
+```
+
+Open `http://127.0.0.1:5175/h5/p11-local`. The runtime uses only fictional
+`persona_fat_loss` and `persona_muscle_gain` sessions and drops its temporary
+database when it shuts down. This test-only path does not enable production,
+staging, real-user data, G2, G3, or `readyForRealUsers=true`.
+
 ## Verification
 
 ```powershell

@@ -14,6 +14,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspaces --if-present",
+    "dev:p11-local": "tsx scripts/p11-local-operable-runtime.ts",
     "db:migrate": "npm run migrate --workspace @lianban/database",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",

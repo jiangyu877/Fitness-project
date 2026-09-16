@@ -33,6 +33,8 @@ const clearingErrorCodes = new Set([
   'SESSION_INVALID',
   'ROLE_NOT_AUTHORIZED',
   'RECORD_TASK_NOT_FOUND',
+  'RECORD_SCHEMA_VERSION_CONFLICT',
+  'IDEMPOTENCY_KEY_REUSED',
   'ROUTE_ACCESS_NOT_APPROVED',
   'RECORD_RESPONSE_INVALID',
 ]);
@@ -73,7 +75,17 @@ export function applyRecordClientDisposition(
     event.clientStateDisposition === 'CLEAR_ALL'
     && typeof event.errorCode === 'string'
     && clearingErrorCodes.has(event.errorCode)
-  ) return clearedState();
+  ) {
+    const cleared = clearedState();
+    const action = event.recoverableActions?.length === 1 ? event.recoverableActions[0] : undefined;
+    if (
+      (event.errorCode === 'RECORD_SCHEMA_VERSION_CONFLICT' && action === 'REFRESH')
+      || (event.errorCode === 'IDEMPOTENCY_KEY_REUSED' && action === 'USE_NEW_IDEMPOTENCY_KEY')
+    ) {
+      return { ...cleared, visibleRecoverableActions: [action] };
+    }
+    return cleared;
+  }
 
   if (event.clientStateDisposition === 'PRESERVE_DRAFT_FOR_VERSION_CONFLICT') {
     const sameTrustedTarget = event.errorCode === 'RECORD_VERSION_CONFLICT'

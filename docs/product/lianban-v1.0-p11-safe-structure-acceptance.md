@@ -214,3 +214,186 @@
 - 当前工作树仍为共享未提交状态，暂存区为空；文件存在和测试通过不得解释为稳定交付、G2 或 G3 获批。
 - 本次 GET fake 只证明 controller 映射、单次调用、脱敏和 test-only 门禁。非 test 结构断言只证明 reader 未注入、fake 零调用且没有成功响应；全局 readiness 可能先返回 503，因此不得外推为生产可信 USER 运行时 404，也不得外推为 PostgreSQL 查询、任务归属、防枚举、锁、并发、幂等或审计证据。
 - 2026-08-04 API context wiring 已收口：端口签名要求 `P11RecordPortSchema`，controller 将同一 test-only、已 gate schema 传入 reader 与响应 mapper；聚焦 context `1 passed`、五文件 API 回归 `53 passed / 0 skipped`，API typecheck/build 通过。指定 Sol Critical 复审为 GREEN，无 Critical/Important，仅限本 wiring slice；不得据此授权 API 生产注册、下一场景、真人、G2 或 G3。
+- 2026-08-04 test-only API-to-PG18 adapter 接入已收口：真实 RED 为旧路径 `404 RECORD_TASK_NOT_FOUND`，最小 GREEN 仅由 test builder 创建隔离 PG18 Pool/P11RecordContextRepository，并保留 API PGlite 与 PG18 双库边界；QA 提出的 cleanup 错误聚合和 schema 双重强转已修复。PG18 单文件 `3 passed`、六文件 P11 API 回归 `56 passed / 0 skipped`、API typecheck/build 通过；QA `QA_CLEAR`，指定 Sol Critical `P11_CONTEXT_ADAPTER_REVIEW_COMPLETE`，无 Critical/Important。该证据仅证明 test-only adapter 接入，不授权生产注册、真人、G2/G3 或下一场景。
+
+- 2026-08-04 下一单场景产品授权冻结为 P11-11：仅在 test-only context reader/已审查 PG18 adapter 中验证关闭日期或关闭任务的本人既有记录以 `READ_ONLY` 返回，读取零状态副作用。必须由服务端确定关闭事实、可信 USER 与本人任务、既有记录和 schema/版本绑定；不得新增写入、补录时限、专业字段、阈值或安全文案。流程固定为研发 RED -> 最小 GREEN -> QA 只读核对 -> 指定 Sol Critical 独立复审 -> 产品收口，其余场景继续冻结。
+
+- 2026-08-04 P11-11 已收口：研发先以真实断言暴露关闭日期响应仍带 `UPSERT_RECORD` 及部分快照，再最小修复为 `READ_ONLY` 空 `allowedActions`，并对 `planning.plan`、`planning.plan_version`、`recording.record_task`、`recording.record`、`recording.record_idempotency`、`recording.record_success_audit`、`audit.audit_event` 使用实际迁移列的完整行和计数做读取前后相等比较。聚焦 P11-11 `1 passed`、PG18 `4 passed`、六文件串行 `57 passed / 0 skipped`，API typecheck/build/diff/staged 通过；QA `QA_CLEAR`；指定 Sol Critical `GREEN / ALLOW — P11-11_REVIEW_COMPLETE`，Critical/Important 均为 0。该结论仅限 test-only 关闭日期只读读取，不授权下一场景、生产、真人、G2/G3 或 release。
+
+- 2026-08-16 产品仅授权 P11-12 的一个关闭日期写拒绝分支：test-only 隔离 PG18 中，服务端 `date_state=CLOSED`、同一 USER/task 已有记录时，一次合法结构 `UPSERT_RECORD` 必须返回 `RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；读取前后以实际表完整行与计数证明计划、任务、记录、幂等和审计无变化。不得据此定义关闭时点、补录时限或其他专业语义，也不得扩成第二分支、生产注册或真人路径。
+
+- 2026-08-16 上述 P11-12 单分支已收口：有效 RED 为真实 controller 返回 `503`，最小 GREEN 仅由 test builder 构造既有 PG18 write repository adapter 并把受控异常映射为现有 API port failure；最终真实 POST 返回 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作，七张实际迁移表完整行/计数前后相等。P11-12 聚焦 `1 passed`、PG18 文件 `5 passed`、六文件串行 `58 passed / 0 skipped`，API typecheck/build/diff/staged 通过；QA `QA_CLEAR`，安全 `SECURITY_NO_OBJECTION`；指定 Sol Critical `GREEN / ALLOW — P11-12_REVIEW_COMPLETE`，Critical/Important 均为 0。其他 P11-12 分支与下一场景继续冻结。
+
+- 2026-08-16 产品继续仅授权 P11-12 的任务关闭单分支：test-only 隔离 PG18 中，服务端 `task_state=CLOSED`、同一 USER/task 已有记录时，一次合法 `UPSERT_RECORD` 必须返回固定 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；七表完整行与计数前后相等。必须复用现有结构并如实记录 direct GREEN 或 RED，不得引入其他关闭/风险/补录语义或生产路径。
+
+- 2026-08-16 上述任务关闭分支已 direct GREEN 并收口：真实 API-to-PG18 测试仅设置 `task_state=CLOSED`，精确返回固定 409 信封，七表完整行/计数前后相等；未修改 controller、adapter 或生产实现。PG18 文件 `6 passed`、六文件串行 `59 passed / 0 skipped`，API typecheck/build/diff/staged 通过；QA `QA_CLEAR`，安全 `SECURITY_NO_OBJECTION`；指定 Sol Critical `GREEN / ALLOW — P11-12_TASK_STATE_CLOSED_REVIEW_COMPLETE`，Critical/Important 均为 0。其他 P11-12 分支与下一场景继续冻结。
+
+- 2026-08-16 产品继续仅授权 P11-12 的风险阻断单分支：test-only 隔离 PG18 中，服务端 `risk_state=BLOCKED`、同一可信 USER/task 已有记录时，一次合法 `UPSERT_RECORD` 必须返回固定 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；七张实际迁移表完整行与计数前后相等。该分支只验证既有机器状态，不定义风险阈值、触发条件、影响范围、恢复条件、安全文案或 SLA。研发是唯一代码写入者；如首次聚焦 direct GREEN 必须如实记录且不得修改生产实现。QA、安全、专业、UI 和运营仅在各自边界只读核对，最终只交指定 Sol Critical 独立复审；尚无执行证据，其他 P11-12 分支与所有后续场景继续冻结。
+
+- 2026-08-16 上述风险阻断分支已 direct GREEN 并收口：真实 API-to-PG18 测试只把服务端 `risk_state` 设为 `BLOCKED`，保持 `task_state/date_state=OPEN`，精确返回固定 409 信封并证明七表完整行/计数不变；本轮未修改 controller、adapter、repository 或生产注册。研发报告 PG18 文件 `7 passed`、六文件 `60 passed / 0 skipped`；QA 独立复现聚焦 `1 passed / 6 skipped`、PG18 文件 `7 passed`、六文件 `60 passed / 0 skipped`，typecheck/build/diff/staged 通过，临时库计数 0，PG18 恢复停止。安全、专业、UI、运营分别返回 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 返回 `GREEN / ALLOW — P11-12_RISK_STATE_BLOCKED_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。证据仅限本地 test-only fixture，不证明专业风险规则、生产/外部数据库、真人、通用锁/并发/幂等/审计原子性、G2/G3 或 release；其他 P11-12 分支与下一场景继续冻结。
+
+- 2026-08-16 产品仅授权 P11-12 风险阻断的创建拒绝单分支：test-only 隔离 PG18 中，服务端 `risk_state=BLOCKED`、`task_state/date_state=OPEN`、同一可信 USER/task 且无已有本人记录时，一次合法 `UPSERT_RECORD`（`expectedRecordVersion=null`）必须返回固定 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；七张实际迁移表完整行与计数前后相等。该分支只补齐已定义的创建拒绝覆盖，不定义风险阈值、触发条件、影响范围、恢复条件、安全文案或 SLA。研发是唯一代码写入者；如首次聚焦 direct GREEN 必须如实记录且不得修改生产实现。其他风险/关闭/补录分支与所有后续场景继续冻结。
+
+- 2026-08-16 上述风险阻断创建拒绝分支已 direct GREEN 并收口：真实 API-to-PG18 测试不插入本人 record，只把服务端 `risk_state` 设为 `BLOCKED`，保持 `task_state/date_state=OPEN`，命令显式使用 `expectedRecordVersion=null`；固定 409 信封与七表完整行/计数不变均通过。本轮未修改 controller、builder、repository、database package、UI 或生产注册。研发报告 PG18 文件 `8 passed`、六文件 `61 passed / 0 skipped`；QA 独立复现聚焦 `1 passed / 7 skipped`、PG18 文件 `8 passed`、六文件 `61 passed / 0 skipped`，typecheck/build/diff/staged 通过，临时库 0，PG18 恢复停止。安全、专业、UI、运营分别返回 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 返回 `GREEN / ALLOW — P11-12_RISK_STATE_BLOCKED_FIRST_WRITE_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。证据仅限本地 test-only fixture，不证明专业风险规则、生产/外部数据库、真人、通用锁/并发/幂等/审计原子性、G2/G3 或 release；其他分支与下一场景继续冻结。
+
+- 2026-08-16 产品仅授权 P11-12 关闭日期的创建拒绝单分支：test-only 隔离 PG18 中，服务端 `date_state=CLOSED`、`task_state=OPEN`、`risk_state=CLEAR`、同一可信 USER/task 且无已有本人 record 时，一次合法 `UPSERT_RECORD`（`expectedRecordVersion=null`）必须返回固定 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；七张实际迁移表完整行与计数前后相等。该分支只补齐“关闭日期后不可创建”的结构覆盖，不定义关闭时点、补录时限或任何专业语义。研发是唯一代码写入者；如首次聚焦 direct GREEN 必须如实记录且不得修改生产实现。当前尚无执行证据，其他关闭/风险/补录分支与所有后续场景继续冻结。
+
+- 2026-08-16 上述关闭日期创建拒绝分支已 direct GREEN 并收口：真实 API-to-PG18 测试不插入本人 record，只将服务端 `date_state` 设为 `CLOSED`，保持 `task_state=OPEN`、`risk_state=CLEAR`，命令显式使用 `expectedRecordVersion=null`；固定 409 信封与七表完整行/计数不变均通过。本轮未修改 controller、builder、repository、database package、UI 或生产注册。研发报告 PG18 文件 `9 passed`、六文件 `62 passed / 0 skipped`；QA 独立复现聚焦 `1 passed / 8 skipped`、PG18 文件 `9 passed`、六文件 `62 passed / 0 skipped`，typecheck/build/diff/staged 通过，临时库 0，PG18 停止且 5432 无监听。安全、专业、UI、运营分别返回 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 返回 `GREEN / ALLOW — P11-12_DATE_STATE_CLOSED_FIRST_WRITE_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。证据仅限本地 test-only fixture，不证明关闭时点或补录规则、生产/外部数据库、真人、通用锁/并发/幂等/审计原子性、G2/G3 或 release；其他分支与下一场景继续冻结。
+
+- 2026-08-16 产品仅授权 P11-12 任务关闭的创建拒绝单分支：test-only 隔离 PG18 中，服务端 `task_state=CLOSED`、`date_state=OPEN`、`risk_state=CLEAR`、同一可信 USER/task 且无已有本人 record 时，一次合法 `UPSERT_RECORD`（`expectedRecordVersion=null`）必须返回固定 `409 RECORD_STATE_BLOCKED`、`DISABLE_EDITOR` 和空恢复动作；七张实际迁移表完整行与计数前后相等。该分支只补齐“任务关闭后不可创建”的结构覆盖，不定义任务关闭条件、关闭时点、补录时限或任何专业语义。研发是唯一代码写入者；如首次聚焦 direct GREEN 必须如实记录且不得修改生产实现。当前尚无执行证据，其他关闭/风险/补录分支与所有后续场景继续冻结。
+
+- 2026-08-16 上述任务关闭创建拒绝分支已 direct GREEN 并收口：真实 API-to-PG18 测试不插入本人 record，只将服务端 `task_state` 设为 `CLOSED`，保持 `date_state=OPEN`、`risk_state=CLEAR`，命令显式使用 `expectedRecordVersion=null`；固定 409 信封与七表完整行/计数不变均通过。本轮未修改 controller、builder、repository、database package、UI 或生产注册。研发报告 PG18 文件 `10 passed`、六文件 `63 passed / 0 skipped`；QA 独立复现聚焦 `1 passed / 9 skipped`、PG18 文件 `10 passed`、六文件 `63 passed / 0 skipped`，typecheck/build/diff/staged 通过，临时库 0，PG18 停止且 5432 无监听。安全、专业、UI、运营分别返回 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 返回 `GREEN / ALLOW — P11-12_TASK_STATE_CLOSED_FIRST_WRITE_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。证据仅限本地 test-only fixture，不证明任务关闭条件、关闭时点或补录规则、生产/外部数据库、真人、通用锁/并发/幂等/审计原子性、G2/G3 或 release；其他分支与下一场景继续冻结。
+
+- 2026-08-16 产品仅授权 P11-03 跨用户任务防枚举单分支：test-only 隔离 PG18 中，可信 USER A 以本人有效会话请求归属于虚构 USER B 的完整 account/plan/plan_version/task，一次合法 `UPSERT_RECORD` 必须返回固定 `404 RECORD_TASK_NOT_FOUND`、`CLEAR_ALL` 和空恢复动作；七张实际迁移表完整行与计数前后相等，且公开响应不得泄露目标主体、计划、任务状态或 schema 事实。本分支只补齐真实 controller + PG18 repository 的跨层归属负例，不替代 API fake 映射证据或 repository 单测，不证明生产防枚举、真人安全、锁/并发/幂等/审计原子性。研发是唯一代码写入者，当前尚无执行证据，其他场景继续冻结。
+
+- 2026-08-16 上述 P11-03 跨用户任务防枚举分支已 direct GREEN 并收口：真实 API-to-PG18 测试保持 USER A 的有效会话，建立完整一致的虚构 USER B account、plan、ACTIVE plan_version 和 task 归属链；合法写请求返回固定 404 信封，公开响应排除 USER B、plan/version/task、schema 与状态 sentinel，七表完整行/计数前后相等。本轮未修改 controller、builder、repository、database package、UI 或生产注册。研发报告 PG18 文件 `11 passed`、六文件 `64 passed / 0 skipped`；QA 独立复现聚焦 `1 passed / 10 skipped`、PG18 文件 `11 passed`、六文件 `64 passed / 0 skipped`，typecheck/build/diff/staged 通过，临时库 0，PG18 停止且 5432 无监听。安全、专业、UI、运营分别返回 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 返回 `GREEN / ALLOW — P11-03_CROSS_USER_NON_ENUMERATION_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。API fake、repository 单测和本跨层证据继续分层；该结论不证明生产防枚举、真人安全、锁/并发/幂等/审计原子性、G2/G3 或 release，下一场景继续冻结。
+
+## 14. 2026-08-18 P11-03-MISSING_TASK 单场景收口
+
+- 前置事实：可信 `USER` 会话、服务端确定主体/计划/日期作用域、opaque 任务标识没有对应任务行，命令为合法 `UPSERT_RECORD`；仅使用现有 test-only schema/adapter/fixture。
+- 必须结果：HTTP `404`，错误码 `RECORD_TASK_NOT_FOUND`，动作 `CLEAR_ALL`，空恢复动作；不得从响应或错误差异泄露任务、目标、计划、schema、状态、token 或幂等键。
+- 零副作用：7 张 authority 表（`iam.account`、`iam.session`、`recording.p11_write_gate`、`recording.p11_write_gate_revision`、`recording.record_task`、`planning.plan`、`planning.plan_version`）与 3 张副作用表（`recording.record`、`recording.record_idempotency`、`recording.record_success_audit`）均做完整 `SELECT *` 行与计数前后相等比较。
+- 证据边界：fake/controller 只证明映射；既有 repository 单测只证明仓储行为；本场景新增的真实 API→PG18 结果单独记录。不得外推为生产锁、并发、幂等、审计原子性、真人或 release 证据。
+- 流程与停止：研发 direct GREEN（聚焦 `1 passed / 11 skipped`，PG18 文件 `12 passed / 0 skipped`）-> QA 独立 PG18 复现并 PASS -> 安全/专业/UI/运营只读 -> 指定 Sol Critical 复审 `GREEN / ALLOW — P11-03_MISSING_TASK_REVIEW_COMPLETE`（Critical/Important/Minor 均为 0）-> 产品收口。此前 STOP 的 4 张 authority 表快照缺口已补齐；该结论仅收口本 test-only 场景，下一场景须另行产品冻结。出现专业字段/规则、第二场景、生产/外部数据库、UI/生产 wiring 或无法证明完整 10 表零副作用，立即停止。
+
+## 15. 2026-08-18 P11-04-PLAN_NOT_ACTIVE 单场景授权与收口
+
+- 前置事实：可信 `USER` 会话、本人 task、服务端确定其关联 plan version 对业务日期不处于唯一 `ACTIVE`；fixture 仅使用既有计划状态语义，不新增专业字段、日期阈值或安全规则。
+- 必须结果：合法 `UPSERT_RECORD`（`expectedRecordVersion=null`）返回 `409 RECORD_PLAN_NOT_ACTIVE`、`CLEAR_ALL`、空恢复动作；不得泄露 token、task、plan、schema、幂等键、输入或 fixture sentinel。
+- 零副作用：7 张 authority 表与 3 张副作用表共 10 张实际迁移表均做完整 `SELECT *` rows/count 前后相等比较；不插入本人 record。
+- 流程与停止：研发单场景 RED/direct GREEN -> QA 独立 PG18 复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical 复审 -> 产品收口。不得开启 P11-04 其他状态、其他 skipped、生产/外部数据库、UI/生产 wiring、真人、G2/G3 或 release。
+- 初审阻断：初次 direct GREEN 的 fixture 使用固定 `business_date=2026-01-02`，计划窗口却为相对当前时间，无法排除 ACTIVE 状态下也因日期不覆盖返回同一错误。指定 Sol Critical 因假阳性风险 BLOCK；旧 QA/四边界结果随之作废。
+- 最小修复：仅把 test-only 计划窗口固定为 `2026-01-01T00:00:00Z` 至 `2099-01-01T00:00:00Z`，在状态变更前断言关联 version 为 ACTIVE 且覆盖固定业务日期，随后唯一变更为 `SUPERSEDED`。未改生产 controller、builder、repository、database package、UI 或 production wiring。
+- 修复后证据：研发与 QA 均报告聚焦 `1 passed / 12 skipped`、PG18 文件 `13 passed / 0 skipped`、六文件 `66 passed / 0 skipped`，typecheck/build/diff 通过；10 张实际迁移表完整 rows/count 前后相等，固定 `409 RECORD_PLAN_NOT_ACTIVE / CLEAR_ALL / []` 无敏感回显，临时 PG18 已清理并停止、5432 无监听。安全/专业/UI/运营修复后重新复核均无范围阻断。
+- 最终结论：指定 Sol Critical 返回 `GREEN / ALLOW — P11-04_PLAN_NOT_ACTIVE_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。仅收口本 test-only 场景；当前无下一场景授权，不证明通用计划授权、生产/真人、锁/并发/幂等/审计原子性、G2/G3、release 或 `readyForRealUsers=true`。
+
+## 16. 2026-08-18 P11-05-CLIENT_USER_FIELD_REJECTED 单场景授权
+
+- 前置事实：可信 `USER` 会话、本人 task、现有合法 `UPSERT_RECORD` 请求；客户端额外提交一个伪造 `userId` authority 字段。服务端 authority 仍必须来自会话与路径/数据库事实，不能接受或序列化该字段。
+- 必须结果：strict command schema 在 repository port 之前返回 `400 RECORD_REQUEST_INVALID`、`CLEAR_ALL`、空恢复动作；fake 调用次数为 0，响应不回显伪造 userId。
+- 证据边界：本场景只验证 API fake/controller 输入拒绝和端口零调用，不接入 PG18，不证明生产权限、数据库锁/并发/幂等/审计原子性、真人或 G2/G3。
+- 流程与停止：研发单场景 RED/direct GREEN -> QA 独立复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical 复审 -> 产品收口。不得开启 P11-05 其他伪造变体、其他 skipped、生产/外部数据库、UI/生产 wiring、真人、G2/G3 或 release。
+- 执行证据：研发与 QA 均确认 strict schema 在 repository port 前拒绝唯一 forged top-level `userId`，固定 `400 RECORD_REQUEST_INVALID / CLEAR_ALL / []`、fake 零调用且无伪造值回显；focused `1 passed / 29 skipped`、四文件 `53 passed / 0 skipped`、typecheck/build/diff 通过。安全/专业/UI/运营均为仅限本边界的条件性 ALLOW，未运行 PG18、未改生产代码/UI/数据库。
+- 最终结论：上一轮指定 Sol Critical 的工程计划审计 Important 已由研发修复，产品工作日志行号 Minor 已校正；复审返回 `GREEN / ALLOW — P11-05_CLIENT_USER_FIELD_REJECTED_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。仅收口本 test-only 单场景；当前无下一场景授权，其他 P11-05 变体及全部生产/真人/G2/G3/release 门禁继续冻结。
+
+## 17. 2026-08-20 P11-08-CONCURRENT_EXISTING_RECORD_UPDATE 单场景授权
+
+- 前置事实：test-only 隔离本机 PG18、可信 `USER`、本人 task、唯一有效 `ACTIVE` plan 与日期窗口、`task_state/date_state/risk_state=OPEN/OPEN/CLEAR`、本人既有一条 record version 1；不使用任何专业字段或真人数据。
+- 并发输入：两个独立合法 `UPSERT_RECORD` 请求使用不同 requestId、不同幂等键和不同虚构 opaque entry value，但相同 task、record kind、schema version 与 `expectedRecordVersion=1`。必须用受控 PG18 锁等待或测试屏障证明两事务真实重叠并竞争同一旧版本；单纯 `Promise.all`、fake 或顺序请求不是并发证据。
+- 必须结果：恰好一个 `200 RECORD_WRITE_ACCEPTED` 且 recordVersion 2；另一个精确返回 `409 RECORD_VERSION_CONFLICT`、`PRESERVE_DRAFT_FOR_VERSION_CONFLICT`、`recoverableActions=['REFRESH']`。成功机器响应按现有合同不要求 `requestId`；冲突响应必须绑定失败请求的 `requestId`，成功请求必须由成功审计的 `request_id` 绑定；不得泄露 token、原始幂等键、另一请求值或内部状态。
+- 持久化验收：最终 record 行数仍为 1、recordVersion 2，`entries` 深度精确等于唯一成功请求的完整值且排除失败值；相对已有 version 1 基线，恰好新增一条状态为 `COMPLETED` 的幂等行，`replay_result` 精确匹配成功 record 的 id、version 和 schema，成功审计只新增一份，失败事务不得留下成功副作用。authority 表保持业务事实不变；测试须使用实际迁移列核对必要 rows/count 和投影。
+- 证据边界：本场景只补充本地 test-only API→PG18 既有记录并发更新的跨层证据；既有 repository 并发单测、API fake 和本场景必须分别记录。不得外推为生产锁策略、所有并发/幂等/审计原子性、真人、G2/G3 或 release。
+- 流程与停止：产品授权 -> 研发唯一写入并执行 RED/direct GREEN、最小 GREEN和聚焦验证 -> QA 独立复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical -> 产品收口。absent-record create、same-key replay、P11-09、第二场景、生产/外部数据库、UI/生产 wiring、真人及全部发布门禁继续冻结。
+
+## 18. 2026-08-21 P11-08-CONCURRENT_EXISTING_RECORD_UPDATE 收口
+
+- 研发修复了 Sol Critical 指出的两个验收 Important，且只修改 P11-08 test-only 测试与工程计划：唯一新增幂等行严格绑定获胜 `session_id` 和真实 HMAC `idempotency_key_digest`，并排除失败 key；锁屏障、锁观察和请求等待均有界，异常时 `finally` 无条件释放首事务并消费请求，确保连接池和临时库可清理。
+- QA 独立结果：focused `1 passed / 13 skipped`、完整 PG18 文件 `14 passed / 0 skipped`、六文件 API 回归 `68 passed / 0 skipped`、API typecheck/build/diff 通过；暂存区为空、临时数据库为 `0`、PG18 已停止且 5432 无监听。安全/隐私返回 `SECURITY_NO_OBJECTION`。
+- 指定 Sol Critical 静态复审确认 Critical/Important/Minor 均为 0，正式结论为 `GREEN / ALLOW — P11-08_CONCURRENT_EXISTING_RECORD_UPDATE_REVIEW_COMPLETE`。
+- 收口范围仅限本机 loopback、虚构数据、test-only API→隔离 PG18 的既有记录并发更新；不证明生产锁策略、通用并发/幂等/审计原子性、真人、G2/G3、release 或 `readyForRealUsers=true`。当前没有下一场景授权，absent-record create、same-key replay、P11-09、其他并发/乱序、生产/外部数据库、UI/生产 wiring、真人和全部发布门禁继续冻结。
+
+## 19. 2026-08-23 P11-09-OUT_OF_ORDER_OLD_REQUEST 单场景授权
+
+- 前置事实：test-only 隔离本机 PG18、可信 USER、本人 task、有效 ACTIVE plan/date、OPEN/OPEN/CLEAR、本人既有 record version 1；不使用专业字段、客户端时间字段或真人数据。
+- 乱序输入：较新合法 `UPSERT_RECORD` 先成功推进 record version 1 到 version 2；随后较旧合法请求使用不同幂等键、相同 task/kind/schema 和 `expectedRecordVersion=1` 到达。服务端只以权威 record version 判断，不按客户端时间判断。
+- 必须结果：旧请求返回现有 `409 RECORD_VERSION_CONFLICT`、保留草稿/刷新动作信封；最终 record 的 version、schema 和完整 entries 深度保持较新成功结果。旧请求不得新增 `COMPLETED` 幂等结果或成功审计，authority 与副作用快照保持不变。
+- 证据边界：只补充本地 test-only API→隔离 PG18 的顺序到达/旧版本拒绝证据；不得外推生产乱序、通用并发/幂等/审计原子性、真人、G2/G3 或 release。same-key replay、absent-record create、P11-10、其他并发/乱序分支继续冻结。
+- 流程与停止：产品授权 -> 研发唯一写入并执行 RED/direct GREEN、最小 GREEN 和 focused PG18 -> QA 独立复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical -> 产品收口；需要客户端时间字段、专业语义、生产 wiring 或外部数据库时立即停止。
+
+## 20. 2026-08-23 P11-09-OUT_OF_ORDER_OLD_REQUEST 收口
+
+- 研发新增的唯一顺序场景先由较新请求将既有 record 从 version 1 推进到 version 2，再由较旧 `expectedRecordVersion=1` 请求到达；服务端按存储 `record_version` 返回现有版本冲突合同，不使用客户端时间。
+- QA 独立结果：focused `1 passed / 14 skipped`、完整 PG18 文件 `15 passed / 0 skipped`、六文件 API 回归 `69 passed / 0 skipped`、API typecheck/build/diff 通过；暂存区为空、临时数据库为 `0`。5432 外部 PID 监听是本轮开始前状态，未停止非本轮进程。
+- 安全/隐私 `SECURITY_NO_OBJECTION`；专业 `PROFESSIONAL_CLEAR`；UI `UI_NO_CHANGE_CLEAR`；运营 `OPERATIONS_BLOCK_MAINTAINED`；指定 Sol Critical 正式结论 `GREEN / ALLOW — P11-09_OUT_OF_ORDER_OLD_REQUEST_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。
+- 收口范围仅限本机 loopback、虚构数据、test-only API→隔离 PG18 的旧版本乱序拒绝；最终新 entries/version/schema 保持不变，旧请求无成功幂等/审计副作用。不证明生产乱序、通用并发/幂等/审计原子性、真人、G2/G3、release 或 `readyForRealUsers=true`。当前没有下一场景授权，same-key replay、absent-record create、P11-10、其他乱序、生产/外部数据库、UI/生产 wiring、真人及全部发布门禁继续冻结。
+
+## 22. 2026-08-23 P11-10-SCHEMA_VERSION_CONFLICT 收口
+
+- P11-10 API 场景确认既有 schema-v1 record 收到 schema-v2 请求时，在幂等 claim 和任何写入前返回 `409 RECORD_SCHEMA_VERSION_CONFLICT / CLEAR_ALL / ['REFRESH']`；十表 rows/count 完整不变，record/version/schema-v1/entries、幂等和成功审计均不变。
+- UI Important 已修复并验证：`RECORD_SCHEMA_VERSION_CONFLICT` 进入 CLEAR_ALL 清除集合，record/draft/editor 等状态清空，仅保留严格服务端 `REFRESH`；UI focused `59/59`、Web typecheck 通过。
+- QA 独立结果：API focused `1 passed / 15 skipped`、PG18 `16 passed / 0 skipped`、六文件 `70 passed / 0 skipped`、API typecheck/build/diff 通过；暂存区为空、临时数据库 `0`。安全/专业/UI/运营分别为 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`。
+- 指定 Sol Critical 正式结论：`GREEN / ALLOW — P11-10_SCHEMA_VERSION_CONFLICT_REVIEW_COMPLETE`，Critical/Important/Minor 均为 0。页面 `.tsx` 未被 Vitest include 收集，不形成页面/浏览器验收证据；5432 外部 PID 监听为本轮开始前环境边界。
+- 收口范围仅限 test-only、loopback PG18、虚构数据的 schema conflict；不证明生产 schema 迁移、通用兼容/并发/幂等/审计原子性、真人、G2/G3、release 或 `readyForRealUsers=true`。当前没有下一场景授权，same-key replay、absent-record create、其他 skipped、生产/外部数据库、UI/生产 wiring、真人和全部发布门禁继续冻结。
+
+## 24. 2026-08-23 P11-06-SAME_INTENT_REPLAY 收口
+
+- 同一完整规范化 `UPSERT_RECORD` 意图、同一主体/task/kind/schema和同一raw idempotency key连续提交两次，不同requestId；两次响应深度完全相同，record/version只推进一次。
+- QA独立结果：focused `1 passed / 16 skipped`、PG18 `17 passed / 0 skipped`、六文件 `71 passed / 0 skipped`、typecheck/build/diff通过；暂存区空、临时库0。唯一COMPLETED幂等行、真实session/HMAC digest/精确replay_result和唯一成功审计均严格匹配，第二次零新增副作用。
+- 安全、专业、UI、运营分别为 `SECURITY_NO_OBJECTION`、`PROFESSIONAL_CLEAR`、`UI_NO_CHANGE_CLEAR`、`OPERATIONS_BLOCK_MAINTAINED`；指定Sol Critical `GREEN / ALLOW — P11-06_SAME_INTENT_REPLAY_REVIEW_COMPLETE`，Critical/Important/Minor均为0。
+- 证据仅限test-only、loopback PG18、虚构数据，不证明生产replay atomicity、通用幂等/并发/审计原子性、真人、G2/G3或release。当前没有下一场景授权，changed-intent、absent-record create、其他skipped和全部发布门禁继续冻结。
+
+## 25. 2026-08-23 P11-07-SAME_KEY_CHANGED_INTENT 单场景授权
+
+- 同一可信主体/task/kind/schema和同一raw idempotency key：第一次合法请求成功，第二次仅改变一个opaque entry值，形成不同完整规范化intent。
+- 第二次必须返回`409 IDEMPOTENCY_KEY_REUSED / CLEAR_ALL / ['USE_NEW_IDEMPOTENCY_KEY']`并绑定第二requestId，不得返回或泄露首次成功结果。
+- 最终record/version/entries、唯一COMPLETED幂等行、真实digest/replay_result和唯一成功审计保持第一次结果；第二次零成功副作用。公开/持久化投影排除raw key/token/changed entry/internal state。
+- 只补test-only API→隔离PG18证据；其他changed-intent变体、absent-record create、生产/真人/G2/G3/release冻结。流程仍为研发→QA→边界部门→指定Sol Critical→产品收口。
+- UI只读复核发现现有parser合同已定义`IDEMPOTENCY_KEY_REUSED / CLEAR_ALL / USE_NEW_IDEMPOTENCY_KEY`，但client-state漏消费；产品在同一P11-07场景内授权最小UI修复，仅允许清空stale状态、严格保留单一服务端动作和新增focused测试，不授权页面、文案或新产品行为。
+- 最终收口：API/PG18与UI修复经QA、安全、专业、运营和指定Sol Critical复核；正式结论`GREEN / ALLOW — P11-07_SAME_KEY_CHANGED_INTENT_REVIEW_COMPLETE`，Critical/Important/Minor均为0。仅收口entry-value分支。
+
+## 26. P11-08-CONCURRENT_ABSENT_RECORD_CREATE授权
+
+- test-only隔离PG18中无既有record；两个不同session/key/entry的合法请求均`expectedRecordVersion=null`，必须在repository冻结锁序的实际最早同主体account锁边界确定性重叠，随后完成task锁和权威状态重读；不得用顺序调用或普通Promise并发替代PG18 Lock等待证据。
+- 收口结论：QA、安全、专业、UI、运营均无阻断；新指定Sol Critical复审确认Critical/Important/Minor均为0，正式结论`GREEN / ALLOW — P11-08_CONCURRENT_ABSENT_RECORD_CREATE_REVIEW_COMPLETE`。仅收口本absent-create分支。
+
+## 27. P11-13-AUTHORITATIVE_READ_FAILURE_AFTER_SUCCESS授权
+
+- 保存成功后自动权威`GET_RECORD_CONTEXT`失败或返回不可信主体时，UI必须清除或禁用stale editor，不展示本地推演成功态。
+- 仅允许UI/state focused测试和既有client-state合同消费；不新增API、数据库、专业字段、客户端成功推演或页面行为。流程为UI→QA→安全/专业/运营→指定Sol→产品收口。
+- 验收仅限 UI/state：测试证明权威 GET 失败或主体/task不可信时清除或禁用 stale editor，不展示本地推演成功态；不新增 API、数据库写行为或页面行为。
+- 不授权生产、专业字段、真人或发布门禁；流程为 UI→QA→边界→指定Sol→产品收口。
+
+## 28. P11-13-AUTHORITATIVE_READ_FAILURE_AFTER_SUCCESS收口
+
+- QA UI60/60、Web typecheck；安全/专业/运营无阻断；指定Sol Critical结论`GREEN / ALLOW — P11-13_AUTHORITATIVE_READ_FAILURE_AFTER_SUCCESS_REVIEW_COMPLETE`，Critical/Important/Minor0。
+- 仅收口UI/state stale清除；页面/浏览器、P11-14/15/16、生产/真人/G2/G3/release继续冻结。
+
+## 29. P11-14-UI_MALFORMED_RESPONSE_FAIL_CLOSED授权
+
+- UI/parser/state仅验证未知状态、字段、动作、额外属性或畸形响应整体fail closed，清除stale状态，不回退demo。
+- 不新增API、数据库、专业字段、页面或生产行为；流程为UI→QA→边界→指定Sol→产品收口。
+
+## 23. 2026-08-23 P11-06-SAME_INTENT_REPLAY 单场景授权
+
+- 前置事实：test-only 隔离本机 PG18、可信 USER、本人 task、有效 ACTIVE plan/date、OPEN/OPEN/CLEAR、通用 schema/fixture；不使用专业字段、客户端时间字段或真人数据。
+- 输入：同一完整规范化 `UPSERT_RECORD` 写入意图、同一主体/task/kind/schema、同一 raw idempotency key，连续提交两次请求；允许 requestId 不同，但业务意图必须完全一致。
+- 必须结果：两次响应深度完全相同；record/version 只推进一次；唯一一条 `COMPLETED` 幂等行和一条成功审计；第二次不得增加 record、幂等完成、审计或其他成功副作用。公开/持久化投影不得泄露 raw key/token/entry/internal state。
+- 证据边界：只补充本地 test-only API→隔离 PG18 的精确重放证据；fake/controller 与 repository 单测必须分层记录，不外推生产 replay atomicity、通用幂等、真人、G2/G3 或 release。changed-intent、absent-record create、其他 skipped 继续冻结。
+- 流程与停止：产品授权 -> 研发唯一写入并执行 RED/direct GREEN、最小 GREEN 和 focused PG18 -> QA 独立复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical -> 产品收口；需要生产 wiring、专业语义、外部数据库或第二行为时立即停止。
+
+## 21. 2026-08-23 P11-10-SCHEMA_VERSION_CONFLICT 单场景授权
+
+- 前置事实：test-only 隔离本机 PG18、可信 USER、本人 task、有效 ACTIVE plan/date、OPEN/OPEN/CLEAR、既有 schema-v1 record；不使用专业字段、客户端时间字段或真人数据。
+- 输入：一次合法 `UPSERT_RECORD` 使用 schema-v2，其他主体/task/kind/version 状态保持既有 fixture 事实；服务端 gate/task/approved schema 仍为 schema-v1。
+- 必须结果：现有 `409 RECORD_SCHEMA_VERSION_CONFLICT`、`CLEAR_ALL`、`recoverableActions=['REFRESH']`；十张实际迁移表完整 rows/count 前后一致，record/version/schema-v1、幂等和成功审计均不变。
+- 证据边界：只补充本地 test-only API→隔离 PG18 的 schema 版本拒绝证据；不外推生产 schema 迁移、通用版本兼容、真人、G2/G3 或 release。same-key replay、absent-record create、P11-09 之后其他场景继续冻结。
+- 流程与停止：产品授权 -> 研发唯一写入并执行 RED/direct GREEN、最小 GREEN 和 focused PG18 -> QA 独立复现 -> 安全/专业/UI/运营只读 -> 指定 Sol Critical -> 产品收口；需要生产 wiring、专业 schema、外部数据库或新增错误语义时立即停止。
+## 30. P11-13/P11-14收口与P11-15授权
+
+- P11-13 Sol结论`GREEN / ALLOW — P11-13_AUTHORITATIVE_READ_FAILURE_AFTER_SUCCESS_REVIEW_COMPLETE`；P11-14 Sol结论`GREEN / ALLOW — P11-14_UI_MALFORMED_RESPONSE_FAIL_CLOSED_REVIEW_COMPLETE`，Critical/Important/Minor均为0。
+- 产品现授权唯一下一UI目标P11-15消息已读/安全深链：验证已读、重读目标状态、失效和越权处理，未知/失效/越权深链fail closed；不新增API/database/专业字段/生产行为。P11-16、browser完整验收和发布门禁冻结。
+
+## 31. P11-15-MESSAGE_READ_SAFE_DEEP_LINK 最小合同
+
+- 消息对象只使用 `messageId`、`readState: UNREAD | READ`、opaque `targetType` 和 opaque `targetId`；不引入专业字段、自由文案或客户端授权身份。
+- 标记已读允许重复执行且不产生重复副作用；打开深链必须重新读取服务端目标状态，客户端不把URL当作授权事实。
+- 目标失效、越权、主体变化或状态不可信时统一 `CLEAR_ALL`，清除消息目标与 stale 状态，不展示本地推演成功态；未知消息/目标结构 fail closed。
+- 仅允许 test-only UI/state/API contract fixture；不进入生产、真人、G2/G3 或 release。流程为产品合同 -> UI/研发 -> QA -> 安全/专业/运营 -> Sol Critical -> 产品收口。
+- 可执行API合同已批准：`GET /api/v1/messages` 返回严格 `{ messages: [{ messageId, readState, targetType, targetId }] }`；`POST /api/v1/messages/:messageId/read` 返回严格 `{ messageId, readState: 'READ' }`；`GET /api/v1/message-targets/:targetType/:targetId` 返回服务端重读的目标状态。三者均要求可信USER session，messageId/targetId仅作opaque定位符；已读重复请求幂等；失效/越权/主体变化统一既有`CLEAR_ALL`错误合同；未知结构fail closed。所有API只在test-only fixture验证，不注册生产路由或迁移。
+
+## 32. P11-16-DATA_EXPORT_REQUEST_STATUS 最小合同
+
+- 仅验证可信 USER 提交一次数据导出请求并查询其状态；test-only fixture 不生成真实导出包、不读取真人字段、不连接生产/外部数据库。
+- 严格对象仅含 opaque `requestId`、`requestType: EXPORT`、`status: SUBMITTED | PROCESSING | COMPLETED | REJECTED`；主体从可信 session 得出，不能由客户端提交。
+- 同一可信主体重复提交同一 requestId 幂等返回同一状态；不同主体访问该 requestId 统一 `CLEAR_ALL`，不泄露状态或数据。
+- PRD 的导出包 7 天失效/删除规则只作为已批准产品约束记录；本地场景不实现真实定时删除或字段导出。
+- 不新增专业字段、客户端时间、真人数据、生产路由/数据库或部署行为；P11-16 其他删除、匿名化、留存和演练分支继续冻结。
+
+## 33. P11-16-DELETE_REQUEST_STATUS 单场景授权
+
+- 仅验证可信 USER 提交一次删除/匿名化请求并查询状态；test-only fixture 不执行真实删除、不读取真人字段、不连接生产/外部数据库。
+- 严格对象仅含 opaque `requestId`、`requestType: DELETE | ANONYMIZE`、`status: SUBMITTED | PROCESSING | COMPLETED | FROZEN | REJECTED`；主体来自可信 session。
+- 同一主体同 requestId 重复提交幂等；跨主体统一 `CLEAR_ALL`；`FROZEN` 仅表示既有安全事件例外状态，不定义新阈值、时限或专业规则。
+- PRD 的 7 日处理、30 日删除/匿名化与安全事件最小冻结规则只作为产品约束记录；本地场景不实现调度器、真实数据处理或演练。
+- QA API/UI复核、安全、专业、运营均无阻断；指定Sol Critical正式结论`GREEN / ALLOW — P11-16_DELETE_REQUEST_STATUS_REVIEW_COMPLETE`，Critical/Important/Minor均为0。仅收口最小DELETE/ANONYMIZE状态fixture。
+- QA/API fixture/UI修复与安全、专业、运营复核均无阻断；指定Sol Critical正式结论`GREEN / ALLOW — P11-16_DELETE_REQUEST_STATUS_REVIEW_COMPLETE`，Critical/Important/Minor均为0。仅收口最小请求状态fixture，不代表真实数据权利演练。

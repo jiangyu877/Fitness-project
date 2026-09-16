@@ -132,3 +132,13 @@ The UI stops at this boundary pending a separately authorized next phase. The
 production P11 client/page consumer, write controls, database path, and real
 user entry remain absent and the runtime remains blocked.
 `readyForRealUsers=false`; G2 is not reached and G3 remains prohibited.
+
+## P11-15 UI Evidence Handoff (2026-08-23)
+
+The authoritative UI focused run is `92 passed / 0 skipped`, including the
+P11-15 message parser, client-state, client, page request-ownership, existing
+P11 regression, and route/state checks. The page `.tsx` file itself is not
+collected by the repository Vitest include pattern; no page `.tsx` result is
+counted in `92 passed`. This count is UI-only evidence and does not prove API
+endpoint behavior, persistence, browser acceptance, real-user readiness, G2,
+or G3.

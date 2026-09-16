@@ -399,6 +399,18 @@ describe('P11 record persistence API pre-wiring behavioral RED', () => {
     expect(fixture.fake.callCount).toBe(0);
   });
 
+  it('rejects a client-supplied userId authority field before the fake', async () => {
+    const fixture = futureFixture('legal USER command plus one forged client authority field', new ScriptedP11RecordRepositoryFake([success()]));
+    const { authorized, sentinels } = await buildFixtureApplication(fixture, 'client-user-field');
+    const forgedUserId = 'forged-client-user-authority';
+    const response = await command(authorized, sentinels, {
+      ...validCommand(sentinels.entryValue), userId: forgedUserId,
+    });
+    assertError(response, 400, 'RECORD_REQUEST_INVALID', 'CLEAR_ALL', [], sentinels, [forgedUserId]);
+    expect(fixture.fake.callCount).toBe(0);
+    expect(JSON.stringify(response.body)).not.toContain(forgedUserId);
+  });
+
   it('returns the non-enumerating 404 for a missing task', async () => {
     const fixture = futureFixture('opaque task has no row', new ScriptedP11RecordRepositoryFake([failure('RECORD_TASK_NOT_FOUND')]));
     const { response, sentinels } = await futureRequest(fixture, 'missing-task', undefined, 'missing-opaque-task');

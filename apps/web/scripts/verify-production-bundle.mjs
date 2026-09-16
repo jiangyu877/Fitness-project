@@ -13,6 +13,10 @@ const prohibitedTerms = [
   '.persona',
   '.persona__copy',
   '.persona--compact',
+  'P11_LOCAL_RUNTIME',
+  'P11_LOCAL_FIXTURE',
+  'p11-local-runtime-page',
+  '/p11-local/fixtures',
 ];
 
 function collectTextFiles(directory) {

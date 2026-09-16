@@ -40,6 +40,8 @@ import { createP07Client, type P07Client, type P07NextAction } from '../features
 import { P07Page } from '../features/p07-real/p07-page.js';
 import { createP11Client, type P11Client } from '../features/p11-real/p11-client.js';
 import { P11RecordPage, P11RecordTestOnlyBlockedPage } from '../features/p11-real/p11-record-page.js';
+import { P11MessagesPage, P11MessagesTestOnlyBlockedPage } from '../features/messages-real/message-page.js';
+import type { MessageClient } from '../features/messages-real/message-client.js';
 import { resolveP11RecordRoute, resolveRoute } from './routing.js';
 
 function getDefaultPersona(): DemoPersona {
@@ -61,6 +63,9 @@ const defaultP07Client = createP07Client();
 const defaultP11Client = createP11Client();
 const DevelopmentPersonaSwitcher = import.meta.env.DEV
   ? React.lazy(() => import('./development-persona-switcher.js'))
+  : null;
+const LocalP11RuntimePage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
+  ? React.lazy(() => import('../features/p11-local/p11-local-runtime-page.js').then((module) => ({ default: module.P11LocalRuntimePage })))
   : null;
 
 export type { DemoRuntimeEnvironment } from '../mocks/personas.js';
@@ -156,13 +161,14 @@ function TaskRow({ icon, tone, label, meta, action, to }: { icon: React.ReactNod
   );
 }
 
-function H5Shell({ page, showPersonaSwitcher, planSession, planClient, identityClient, onSessionCreated }: {
+function H5Shell({ page, showPersonaSwitcher, planSession, planClient, identityClient, onSessionCreated, messageClient }: {
   page: PageDefinition;
   showPersonaSwitcher: boolean;
   planSession: PlanSession | null;
   planClient: PlanClient;
   identityClient: IdentityClient;
   onSessionCreated: () => Promise<void>;
+  messageClient: MessageClient | undefined;
 }) {
   const isToday = page.id === 'H5-TOD-01';
   const [personaId, setPersonaId] = useState(defaultPersona.id);
@@ -171,7 +177,7 @@ function H5Shell({ page, showPersonaSwitcher, planSession, planClient, identityC
   return (
     <div className="h5-viewport">
       <main className="h5-main">
-        {isToday ? <H5Today persona={persona} showPersonaSwitcher={showPersonaSwitcher} onPersonaChange={setPersonaId} /> : authOnboardingKind(page) ? <AuthOnboardingPage kind={authOnboardingKind(page)!} identityClient={identityClient} onSessionCreated={onSessionCreated} /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : realPlanKind(page) ? <RealPlanPage kind={realPlanKind(page)!} session={planSession} client={planClient} /> : <GenericPage page={page} />}
+        {isToday ? <H5Today persona={persona} showPersonaSwitcher={showPersonaSwitcher} onPersonaChange={setPersonaId} /> : page.id === 'H5-P1-MSG-01' ? (messageClient && planSession ? <P11MessagesPage session={planSession} client={messageClient} /> : <P11MessagesTestOnlyBlockedPage />) : authOnboardingKind(page) ? <AuthOnboardingPage kind={authOnboardingKind(page)!} identityClient={identityClient} onSessionCreated={onSessionCreated} /> : phase3Kind(page) ? <Phase3Page kind={phase3Kind(page)!} /> : realPlanKind(page) ? <RealPlanPage kind={realPlanKind(page)!} session={planSession} client={planClient} /> : <GenericPage page={page} />}
       </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         <MobileNavItem to="/h5/today" label="今日" icon={<Home />} active={isToday} />
@@ -324,15 +330,16 @@ function GenericPage({ page }: { page: PageDefinition }) {
   );
 }
 
-export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient; p07Client?: P07Client; p11Client?: P11Client };
+export type AppRoutesProps = { demoEnvironment?: DemoRuntimeEnvironment; identityClient?: IdentityClient; planClient?: PlanClient; p07Client?: P07Client; p11Client?: P11Client; messageClient?: MessageClient };
 
-export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient, p07Client = defaultP07Client, p11Client = defaultP11Client }: AppRoutesProps) {
+export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityClient = defaultIdentityClient, planClient = defaultPlanClient, p07Client = defaultP07Client, p11Client = defaultP11Client, messageClient }: AppRoutesProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const page = resolveRoute(location.pathname);
   const detailVersion = planDetailVersion(location.pathname);
   const p11RecordRoute = resolveP11RecordRoute(location.pathname, location.search);
-  const [recoveryPending, setRecoveryPending] = useState(() => identityClient.hasStoredSession());
+  const localP11Path = location.pathname === '/h5/p11-local' && demoEnvironment.mode === 'test' && LocalP11RuntimePage !== null;
+  const [recoveryPending, setRecoveryPending] = useState(() => !localP11Path && identityClient.hasStoredSession());
   const [recoveryError, setRecoveryError] = useState<IdentityError>();
   const [restoredSession, setRestoredSession] = useState<RestoredUserSession>();
 
@@ -359,8 +366,9 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
   }
 
   useEffect(() => {
+    if (localP11Path) return;
     void restore();
-  }, [identityClient]);
+  }, [identityClient, localP11Path]);
 
   if (location.pathname === '/') return <Navigate to="/h5/today" replace />;
   if (recoveryPending) return <div className="h5-viewport"><main className="h5-main"><div className="generic-page generic-page--h5 identity-next-action" role="status">正在确认登录状态</div></main></div>;
@@ -368,6 +376,22 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
     message={recoveryError.message}
     {...(recoveryError.recoverableActions.includes('RETRY') ? { onRetry: restore } : {})}
   /></main></div>;
+  if (localP11Path && LocalP11RuntimePage) {
+    return <div className="h5-viewport"><main className="h5-main"><Suspense fallback={<div className="generic-page generic-page--h5" role="status">P11_LOCAL_RUNTIME_LOADING</div>}>
+      <LocalP11RuntimePage onOpen={(fixture) => {
+        setRestoredSession({
+          kind: 'session-created', accountId: fixture.accountId, token: fixture.sessionToken,
+          expiresAt: fixture.expiresAt, nextAction: 'VIEW_TODAY',
+        });
+        try {
+          sessionStorage.setItem('lianban.user-session', JSON.stringify({ token: fixture.sessionToken, expiresAt: fixture.expiresAt }));
+        } catch {
+          // The mounted test runtime still carries the trusted session in memory.
+        }
+        navigate(`/h5/records?taskId=${encodeURIComponent(fixture.taskId)}`, { replace: true });
+      }} />
+    </Suspense></main></div>;
+  }
   const identityAction = nextActionForIdentityPath(location.pathname);
   if (identityAction) {
     const p07Actions = new Set(['ACCEPT_CURRENT_CONSENT', 'WAIT_FOR_SCREENING_RULES', 'WAIT_FOR_HUMAN_REVIEW', 'STOP_SERVICE_FLOW', 'COMPLETE_PROFILE', 'WAIT_FOR_PLAN']);
@@ -391,7 +415,7 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
   if (!page) return <div className="not-found"><AlertTriangle /><h1>页面不存在</h1><Link to="/h5/today">返回今日</Link></div>;
   const showPersonaSwitcher = isDemoPersonaSwitcherEnabled(demoEnvironment);
   const planSession = restoredSession ? { accountId: restoredSession.accountId, token: restoredSession.token } : null;
-  return page.surface === 'h5' ? <H5Shell page={page} showPersonaSwitcher={showPersonaSwitcher} planSession={planSession} planClient={planClient} identityClient={identityClient} onSessionCreated={restore} /> : <WebShell page={page} showPersonaSwitcher={showPersonaSwitcher} />;
+  return page.surface === 'h5' ? <H5Shell page={page} showPersonaSwitcher={showPersonaSwitcher} planSession={planSession} planClient={planClient} identityClient={identityClient} onSessionCreated={restore} messageClient={messageClient} /> : <WebShell page={page} showPersonaSwitcher={showPersonaSwitcher} />;
 }
 
 function planDetailVersion(path: string): string | undefined {

@@ -33,6 +33,40 @@ describe('P11 client-state disposition', () => {
     });
   });
 
+  it('clears all record state for schema version conflict while retaining only REFRESH', () => {
+    expect(applyRecordClientDisposition(populatedState, {
+      errorCode: 'RECORD_SCHEMA_VERSION_CONFLICT',
+      clientStateDisposition: 'CLEAR_ALL',
+      recoverableActions: ['REFRESH'],
+    })).toEqual({
+      trustedSubjectId: null,
+      taskId: null,
+      recordTarget: null,
+      recordData: null,
+      unsavedInput: null,
+      conflictDraft: null,
+      editor: null,
+      visibleRecoverableActions: ['REFRESH'],
+    });
+  });
+
+  it('clears all record state for reused idempotency key while retaining only the server action', () => {
+    expect(applyRecordClientDisposition(populatedState, {
+      errorCode: 'IDEMPOTENCY_KEY_REUSED',
+      clientStateDisposition: 'CLEAR_ALL',
+      recoverableActions: ['USE_NEW_IDEMPOTENCY_KEY'],
+    })).toEqual({
+      trustedSubjectId: null,
+      taskId: null,
+      recordTarget: null,
+      recordData: null,
+      unsavedInput: null,
+      conflictDraft: null,
+      editor: null,
+      visibleRecoverableActions: ['USE_NEW_IDEMPOTENCY_KEY'],
+    });
+  });
+
   it('preserves an unsaved draft only for the same trusted subject and target record version conflict', () => {
     expect(applyRecordClientDisposition(populatedState, {
       errorCode: 'RECORD_VERSION_CONFLICT',
