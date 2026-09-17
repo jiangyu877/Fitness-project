@@ -73,6 +73,10 @@ G2 预备包当前结论为 `INCOMPLETE / G2_PREPARATION`：生命周期双 pers
 
 `P11-DUAL-FIXTURE-LOCAL-OPERABLE-STRUCTURE` 已按命名 test-only slice 收口：`PG18_REPOSITORY + CROSS_LAYER_E2E` runtime focused `5 passed`；`UI_STATE` client/state/page/selector `43 passed`；launcher lifecycle `7 passed`；API/Web typecheck/build、生产包排除和 diff-check 通过；`BROWSER` 在 1280 x 720 视口完成减脂、增肌各一次写入和权威重读，回看减脂时未出现增肌值，双路线截图已留存。首轮 Sol Critical `REJECT` 的五个 Important 已按同一命名 slice 完成 RED -> GREEN 纠偏，后续 liveness 检查补齐缺失 admin URL、单请求超时和 Windows 子进程隔离；最终只读边界为 QA `QA_CLEAR`、UI `UI_CLEAR`、本地运维 `LOCAL_SLICE_CLEAR`、安全 `SECURITY_NO_OBJECTION`、专业 `PROFESSIONAL_CLEAR`，scoped Sol re-review 为 Critical/Important/Minor `0/0/0` 并结论 `GREEN / ALLOW — P11_DUAL_FIXTURE_LOCAL_OPERABLE_STRUCTURE_REVIEW_COMPLETE`。默认并行 `npm test` 因 worker OOM 中止，最终隔离 PG18 单 worker 回归为 `65/66 files`、`797/806 tests`，9 项失败全部来自超出本场景的旧 `plan-lifecycle` 固定日期窗口与当前可信时间冲突；较早中断运行的残留库已受控清理，最终 port-5433 全量运行自动清理至 `lianban_%` 为 0。本条不得外推为 P11 总体通过、G2/G3、生产、真人、release 或 `readyForRealUsers=true`，生产运维继续 `OPERATIONS_BLOCKED`，也不自动授权下一场景。
 
+### 2026-09-17 计划生命周期固定日期回归预审
+
+经用户授权的只读预审确认：`plan-lifecycle.e2e.spec.ts` 的 9 项失败（8 项阻断于 P08 发布 lead-time 规则、1 项属 P09/P10 边界多 ACTIVE 读守卫）均为测试夹具固定日期相对真实时钟老化所致——受影响测试未注入 `planClock`，发布与读守卫按数据库真实时间 fail closed 属正确生产行为。生产代码自 2026-07-26 无改动，无需修改。修复建议为 test-only `planClock` 注入，须另行产品授权后按单场景流程执行；详见 `../engineering/plans/2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`。P08/P09/P10 台账状态不变；本预审不构成修复或回归全绿证据。
+
 ## 3. 阶段门槛
 
 | 阶段 | 当前结论 | 尚缺证据 |
