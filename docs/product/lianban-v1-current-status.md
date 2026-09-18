@@ -24,11 +24,12 @@
 - 2026-09-17 只读预审已确认上述 9 项失败根因：受影响测试未注入 `planClock`，发布 lead-time（8 项，自 2026-08-08T12:00Z 起注定 409）与多 ACTIVE 读守卫（1 项，自 2026-07-29 起注定 200）按真实时间 fail closed 属正确生产行为；生产代码自 2026-07-26 无改动。报告见 `docs/engineering/plans/2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`；修复已于 2026-09-18 执行并收口（见下条）。
 - 2026-09-18 生命周期固定日期修复（`PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION`）：九个 fixture 注入 test-only `planClock` 并新增窗口真值断言；focused `36/36 passed`、typecheck/build `EXIT=0`；全量单 worker 复跑 `66/66 files`、`806/806 tests`、`EXIT=0`（239s；此前 PG18 停止时的一次运行 133 项 `ECONNREFUSED` 为基础设施阻断，非行为回归），临时库 `lianban_%` 为 0；未改生产代码，状态 `SELF_REVIEW_COMPLETE`（产品负责人 2026-09-18 接受自审验收，无外部独立复核）。
 - 2026-09-18 P10 结构化任务生成（`P10-ACTIVE-WINDOW-TASK-GENERATION-STRUCTURE`）：test-only 生成器按 Asia/Shanghai 业务日期为唯一 ACTIVE 有限窗口生成 `recording.record_task` 行（确定性不透明 id、幂等、无专业内容），并绑定既有 P11 记录路径（真实命令路由 `200 RECORD_WRITE_ACCEPTED`）；focused `5/5`、typecheck/build `EXIT=0`、全量单 worker `67/67 files`、`811/811 tests`、临时库 0；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
+- 2026-09-18 P12 首个切片（`P12-WEEKLY-FEEDBACK-STRUCTURE`）：test-only 周反馈结构契约——周窗口推导（4 周 × 7 天 Shanghai）、9 字段清单、数据事实→充分性注入式判定（fail closed）、PRD §6.4 数据不足硬限制（仅 `KEEP_CORE_PLAN`/`RESOLVE_EXECUTION_FRICTION`）、疼痛 `REPORTED` → `RISK_HANDOFF`、采纳记录结构；focused `8/8`、typecheck/build `EXIT=0`、全量单 worker `68/68 files`、`819/819 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - P19 浏览器与无障碍：验收台账标记通过，范围限 Edge、Narrator、键盘、六视口、200% 缩放和 reduced-motion 证据；不外推真人服务或 G2/G3。
 
 ## 当前活动边界
 
-- 最近活动场景 `P10-ACTIVE-WINDOW-TASK-GENERATION-STRUCTURE`（test-only 结构化任务生成）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；上一场景 `PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION` 已同样收口；当前没有自动开启的下一场景。
+- 最近活动场景 `P12-WEEKLY-FEEDBACK-STRUCTURE`（P12 首个 test-only 结构切片）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；上一场景 `P10-ACTIVE-WINDOW-TASK-GENERATION-STRUCTURE` 已同样收口；当前没有自动开启的下一场景。
 - 2026-09-17 已生成短交接 `docs/product/lianban-v1-handoff-2026-09-17.md`；交接与预审均由 ZCode 按用户委托执行，边界自审结论标注为 ZCode 自审。
 - 同日验收台账与工作日志已覆盖此前“其后没有新的场景授权”的旧交接表述；该文档差异已在本轮同步，不得据此开启第二个场景。
 - 不得同时推进 P11 消息生产化、P16 真实数据权利、其他浏览器/部署/staging、生产、真人、G2 或 G3。
