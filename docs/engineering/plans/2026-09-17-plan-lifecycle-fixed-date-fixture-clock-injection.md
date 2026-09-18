@@ -4,7 +4,7 @@
 - 日期：2026-09-17
 - 授权：产品负责人于 2026-09-17 对话中批准（下方原文）
 - 基线：提交 `586540a`（含预审报告 `2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`）
-- 写入者：ZCode（单场景唯一写入者）；无外部独立审查线程，本场景结论为 ZCode 自审并保持 `REVIEW_PENDING`，不使用任何 clearance 名义
+- 写入者：ZCode（单场景唯一写入者）；无外部独立审查线程，产品负责人 2026-09-18 接受 ZCode 自审验收（`SELF_REVIEW_COMPLETE`），不使用任何 clearance 名义
 
 ## 1. 授权原文（用户批准）
 
@@ -51,4 +51,4 @@ STOP: 需改生产代码、需改产品语义、需 skip/删除用例、范围�
 
 - 收口条件：focused 36/36、typecheck/build 通过、全量回归结果如实记录；若 PG18 基础设施不可用，如实标注为未执行并保留 focused 证据，不以外推替代。
 - 停止条件：需改生产代码、需改产品语义、需 skip/删除用例、出现第二场景范围或基础设施异常时停止并报告。
-- 审查：无外部独立线程；结论为 ZCode 自审 + `REVIEW_PENDING`。
+- 审查：无外部独立线程；产品负责人 2026-09-18 接受 ZCode 自审验收（`SELF_REVIEW_COMPLETE`）。
