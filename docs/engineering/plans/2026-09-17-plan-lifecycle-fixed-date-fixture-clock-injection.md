@@ -44,7 +44,7 @@ STOP: 需改生产代码、需改产品语义、需 skip/删除用例、范围�
 | RED | 该文件 focused 单 worker | `9 failed / 27 passed` | `CROSS_LAYER_E2E` | 已完成（预审，2026-09-17） |
 | GREEN | 同上 | `36/36 passed` | `CROSS_LAYER_E2E` | **已完成（2026-09-18）：`1 file / 36 tests passed`，45.45s** |
 | 类型/构建 | `npm run typecheck`；`npm run build` | 通过 | — | **已完成（2026-09-18）：两项 EXIT=0，无错误输出** |
-| 全量回归 | `npm test -- --maxWorkers=1 --minWorkers=1`（需本机 PG18 管理员 URL） | 预期 `66/66 files`、`806/806 tests` | 混合（PG18 + PGlite） | **已执行（2026-09-18）：`60/66 files`、`673/806 tests`；`plan-lifecycle.e2e.spec.ts` 在全量运行中 `36 tests ✓`；6 个失败文件全部为 PG18 连接失败（`ECONNREFUSED 127.0.0.1:5432`，服务 `postgresql-x64-18` 停止且启动需管理员权限）——基础设施阻断，非行为回归。待 PG18 启动后复跑确认。** |
+| 全量回归 | `npm test -- --maxWorkers=1 --minWorkers=1`（需本机 PG18 管理员 URL） | 预期 `66/66 files`、`806/806 tests` | 混合（PG18 + PGlite） | **已完成（2026-09-18）：PG18 服务启动后复跑单 worker `66/66 files`、`806/806 tests`、`EXIT=0`（239s），临时库 `lianban_%` 检查为 0；此前一次运行（PG18 停止）的 133 项 `ECONNREFUSED` 为基础设施阻断，非行为回归。** |
 | FROZEN | 其余测试文件、生产代码、迁移、UI、其他场景 | 不修改 | — | 保持冻结 |
 
 ## 5. 收口与停止

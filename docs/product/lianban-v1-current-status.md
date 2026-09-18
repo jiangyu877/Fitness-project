@@ -22,7 +22,7 @@
 - P11 本地可操作结构：test-only runtime、schema-driven P11 record client/page、双 fixture selector 与 loopback launcher已按命名切片收口；API runtime focused `5 passed`，Web focused `43 passed`，launcher lifecycle `7 passed`，API/Web typecheck/build 和 production-bundle exclusion 通过；本机 in-app browser 实际完成减脂与增肌各一次写入、权威重读及回看隔离，双路线截图留存在 `docs/engineering/evidence/`；最终只读边界为 QA `QA_CLEAR`、UI `UI_CLEAR`、本地运维 `LOCAL_SLICE_CLEAR`、安全 `SECURITY_NO_OBJECTION`、专业 `PROFESSIONAL_CLEAR`，新 Sol Critical 为 0/0/0 并结论 `GREEN / ALLOW — P11_DUAL_FIXTURE_LOCAL_OPERABLE_STRUCTURE_REVIEW_COMPLETE`。证据层仅为 `BROWSER`、`CROSS_LAYER_E2E`、`PG18_REPOSITORY`、`UI_STATE`；本场景 `BROWSER` 不代表 Edge/Narrator 或 P19 无障碍复验，生产运维仍为 `OPERATIONS_BLOCKED`。
 - 当前隔离 PG18 全量单 worker 回归为 `65/66 files`、`797/806 tests`；9 项失败全部位于旧 `apps/api/test/plan-lifecycle.e2e.spec.ts`，其固定 2026-07/08 窗口与 2026-09-05 数据库可信时间冲突。较早的共享数据库中断运行曾需受控清理 1 个生成库；最终 port-5433 全量运行自动清理至 `lianban_%` 为 0。上述仓库级阻断不改写为通过，也不属于已收口的 P11 本地可操作切片。
 - 2026-09-17 只读预审已确认上述 9 项失败根因：受影响测试未注入 `planClock`，发布 lead-time（8 项，自 2026-08-08T12:00Z 起注定 409）与多 ACTIVE 读守卫（1 项，自 2026-07-29 起注定 200）按真实时间 fail closed 属正确生产行为；生产代码自 2026-07-26 无改动。报告见 `docs/engineering/plans/2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`；修复已于 2026-09-18 执行并收口（见下条）。
-- 2026-09-18 生命周期固定日期修复（`PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION`）：九个 fixture 注入 test-only `planClock` 并新增窗口真值断言；focused `36/36 passed`、typecheck/build `EXIT=0`，该文件在全量运行中亦 `36 tests ✓`；全量单 worker `60/66 files`、`673/806 tests`，6 个失败文件全部为本机 PG18 服务停止导致的 `ECONNREFUSED 127.0.0.1:5432`（基础设施阻断，待服务启动后复跑）；未改生产代码，状态 `REVIEW_PENDING`（ZCode 自审）。
+- 2026-09-18 生命周期固定日期修复（`PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION`）：九个 fixture 注入 test-only `planClock` 并新增窗口真值断言；focused `36/36 passed`、typecheck/build `EXIT=0`；全量单 worker 复跑 `66/66 files`、`806/806 tests`、`EXIT=0`（239s；此前 PG18 停止时的一次运行 133 项 `ECONNREFUSED` 为基础设施阻断，非行为回归），临时库 `lianban_%` 为 0；未改生产代码，状态 `REVIEW_PENDING`（ZCode 自审）。
 - P19 浏览器与无障碍：验收台账标记通过，范围限 Edge、Narrator、键盘、六视口、200% 缩放和 reduced-motion 证据；不外推真人服务或 G2/G3。
 
 ## 当前活动边界
@@ -38,7 +38,7 @@
 - P12 周反馈/周调整、P13 风险暂停/恢复、P14 真实工作队列、P17 审计查询、P20 运维恢复、P21 四周指标未完成。
 - 专业规则、认证安全/MFA、隐私合规、数据权利演练、备份恢复、运营值班和部署安全证据未全部关闭。
 - 工作树改动均已形成提交（交接/预审 `586540a`、时钟注入修复批次）；任何旧测试数字都只能作为历史证据，不能替代当前复跑。
-- 仓库全量回归原有 9 项旧 plan-lifecycle 固定日期失败已由 test-only 时钟注入修复（2026-09-18，`REVIEW_PENDING`）；全量复跑待本机 PG18 启动后进行，当前不得据此宣称仓库全绿。
+- 仓库全量回归原有 9 项旧 plan-lifecycle 固定日期失败已由 test-only 时钟注入修复；2026-09-18 复跑全量单 worker `66/66 files`、`806/806 tests` 全绿（`REVIEW_PENDING`，ZCode 自审；仓库全绿不等于 P08/P09/P10 总体通过，也不外推 G2/G3、生产或真人）。
 
 ## 新任务最小读取集
 
