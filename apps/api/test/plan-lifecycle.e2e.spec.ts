@@ -3,6 +3,7 @@ import { hashPassword, type AuthSecurityPolicy } from '@lianban/domain';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApplication as buildTestApplication } from './build-test-application.js';
+import { createWeeklyFeedbackFixture, deriveWeeklyWindows, requiredWeeklyFeedbackFields } from './support/p12-weekly-feedback.js';
 import type { Environment } from '../src/config/environment.js';
 import { DatabaseService } from '../src/database/database.service.js';
 
@@ -1252,6 +1253,101 @@ describe('plan lifecycle HTTP API', () => {
       .set(writeHeaders('persona-muscle-timeout')).set('Authorization', `Bearer ${tokens.get('persona_muscle_gain')}`)
       .send({ type: 'CONFIRM_DIET' }).expect(409)
       .expect(({ body }) => expect(body.errorCode).toBe('CONFIRMATION_DEADLINE_PASSED'));
+  });
+
+  it('P12 weekly adjustment: runs the adjusted version through review, publish, dual confirmation and activation', async () => {
+    const baseEffectiveAt = '2026-08-10T00:00:00.000Z';
+    const baseEffectiveTo = '2026-08-17T00:00:00.000Z';
+    const adjustmentEffectiveAt = '2026-08-17T00:00:00.000Z';
+    const adjustmentEffectiveTo = '2026-08-23T16:00:00.000Z';
+    let trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    const agent = request(app.getHttpServer());
+    await seedPlanFixture(app, agent);
+
+    await prepareReviewedWithWindow(agent, 'weekly-base-v1', 'user-1', baseEffectiveAt, baseEffectiveTo);
+    await transition(agent, 'weekly-base-v1', { type: 'PUBLISH', occurredAt: publishAt }, 'PENDING_CONFIRMATION');
+    trustedNow = new Date('2026-08-09T10:00:00.000Z');
+    await transition(agent, 'weekly-base-v1', { type: 'CONFIRM_DIET' }, 'PENDING_CONFIRMATION');
+    await transition(agent, 'weekly-base-v1', { type: 'CONFIRM_TRAINING' }, 'SCHEDULED');
+    trustedNow = new Date(baseEffectiveAt);
+    await transition(agent, 'weekly-base-v1', { type: 'ACTIVATE' }, 'ACTIVE');
+
+    const feedback = createWeeklyFeedbackFixture({ sufficiencyPolicy: () => 'SUFFICIENT' });
+    const submission = feedback.submit({
+      weekIndex: 1,
+      windowState: 'OPEN',
+      fields: {
+        execution: 'opaque-execution', trainingPerformance: 'opaque-training', sleep: 'opaque-sleep',
+        energy: 'opaque-energy', hunger: 'opaque-hunger', stress: 'opaque-stress',
+        recovery: 'opaque-recovery', pain: 'CLEAR',
+      },
+      facts: { recordedDays: 7 },
+      requestedOutcome: 'CHANGE_TRAINING_CONTENT',
+    });
+    expect(submission.outcome).toBe('ADJUSTMENT_PENDING');
+    const adoption = submission.outcome === 'ADJUSTMENT_PENDING' ? submission.adoption : undefined;
+    expect(adoption).toMatchObject({ weekIndex: 1, outcome: 'CHANGE_TRAINING_CONTENT' });
+
+    const database = app.get(DatabaseService).database;
+    await agent.post('/api/v1/plan-versions')
+      .set(writeHeaders('create-weekly-adjustment')).set('Authorization', `Bearer ${tokens.get('operations')}`)
+      .send({
+        id: 'weekly-adjustment-v2', userId: 'user-1',
+        effectiveAt: adjustmentEffectiveAt, effectiveTo: adjustmentEffectiveTo, contentMode: 'REVIEWED',
+      })
+      .expect(201);
+    planUsers.set('weekly-adjustment-v2', 'user-1');
+    // the schema-frozen weekly adjustment source type is set while the version is still a draft;
+    // production creation wiring is a later slice and the immutability guard only protects published versions
+    await database.query(
+      `UPDATE planning.plan_version SET source_type='WEEKLY_ADJUSTMENT' WHERE id='weekly-adjustment-v2' AND status='DRAFT'`,
+    );
+    await transition(agent, 'weekly-adjustment-v2', { type: 'SUBMIT_REVIEW' }, 'IN_REVIEW');
+    await transition(agent, 'weekly-adjustment-v2', { type: 'APPROVE_DIET' }, 'IN_REVIEW');
+    await transition(agent, 'weekly-adjustment-v2', { type: 'APPROVE_TRAINING' }, 'READY_TO_PUBLISH');
+
+    trustedNow = new Date(publishAt);
+    await transition(agent, 'weekly-adjustment-v2', { type: 'PUBLISH', occurredAt: publishAt }, 'PENDING_CONFIRMATION');
+    trustedNow = new Date('2026-08-15T10:00:00.000Z');
+    await transition(agent, 'weekly-adjustment-v2', { type: 'CONFIRM_DIET' }, 'PENDING_CONFIRMATION');
+    await transition(agent, 'weekly-adjustment-v2', { type: 'CONFIRM_TRAINING' }, 'SCHEDULED');
+    trustedNow = new Date(adjustmentEffectiveAt);
+    await transition(agent, 'weekly-adjustment-v2', { type: 'ACTIVATE' }, 'ACTIVE');
+
+    expect((await database.query(
+      `SELECT id, status, source_type AS "sourceType", version_number AS "versionNumber",
+         effective_at AS "effectiveAt", effective_to AS "effectiveTo"
+       FROM planning.plan_version WHERE user_id='user-1' ORDER BY version_number`,
+    )).rows).toEqual([
+      {
+        id: 'weekly-base-v1', status: 'SUPERSEDED', sourceType: 'INITIAL', versionNumber: 1,
+        effectiveAt: new Date(baseEffectiveAt), effectiveTo: new Date(baseEffectiveTo),
+      },
+      {
+        id: 'weekly-adjustment-v2', status: 'ACTIVE', sourceType: 'WEEKLY_ADJUSTMENT', versionNumber: 2,
+        effectiveAt: new Date(adjustmentEffectiveAt), effectiveTo: new Date(adjustmentEffectiveTo),
+      },
+    ]);
+    expect({ ...adoption, planVersionId: 'weekly-adjustment-v2', previousPlanVersionId: 'weekly-base-v1' })
+      .toEqual({
+        weekIndex: 1, outcome: 'CHANGE_TRAINING_CONTENT',
+        submittedFieldIds: [...requiredWeeklyFeedbackFields],
+        planVersionId: 'weekly-adjustment-v2', previousPlanVersionId: 'weekly-base-v1',
+      });
+    await agent.get('/api/v1/users/user-1/plans/current')
+      .set('Authorization', `Bearer ${tokens.get('user-1')}`)
+      .expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({
+        businessStatus: 'CURRENT_PLAN', plan: { id: 'weekly-adjustment-v2' },
+      }));
+    expect(deriveWeeklyWindows(new Date(adjustmentEffectiveAt), new Date(adjustmentEffectiveTo)))
+      .toEqual([[
+        '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23',
+      ]]);
   });
 });
 
