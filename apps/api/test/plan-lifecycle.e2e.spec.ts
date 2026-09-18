@@ -132,7 +132,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('returns a pure user-scoped pending summary without draft or review details', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
 
@@ -224,7 +230,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('requires authorized plan reads and leaves scheduled plans unchanged when a client supplies at', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'pure-read-scheduled', 'user-1');
@@ -450,7 +462,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('rejects an entire published version when either user part is rejected', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'plan-user-rejected', 'user-3');
@@ -468,7 +486,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('replays a terminal user confirmation without duplicate transition audit', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'terminal-confirm-replay', 'user-1');
@@ -573,7 +597,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('makes cross-user and nonexistent user transitions indistinguishable', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'other-user-pending', 'user-1');
@@ -604,7 +634,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('validates staff review rejection reason codes without changing USER rejection bodies', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await createPlan(agent, 'review-reason-validation', 'user-1');
@@ -832,7 +868,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('blocks a second pending version for the same user', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'plan-first', 'user-5');
@@ -948,7 +990,13 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('does not promote a fully confirmed scheduled version from a client supplied time', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date(publishAt);
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
+    // fixture window truth: the injected trusted clock must satisfy the 24h publication lead time
+    expect(trustedNow.getTime()).toBeLessThanOrEqual(new Date(deadline).getTime() - 86_400_000);
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     await preparePublished(agent, 'plan-auto-active', 'user-6');
@@ -1095,7 +1143,11 @@ describe('plan lifecycle HTTP API', () => {
   });
 
   it('fails current-plan reads closed when bypassed data contains multiple active versions', async () => {
-    app = await buildApplication(approvedEnvironment, { authPolicy: policy });
+    const trustedNow = new Date('2026-07-27T00:00:00.000Z');
+    app = await buildApplication(approvedEnvironment, {
+      authPolicy: policy,
+      planClock: { now: () => trustedNow },
+    });
     const agent = request(app.getHttpServer());
     await seedPlanFixture(app, agent);
     const database = app.get(DatabaseService).database;
@@ -1113,6 +1165,9 @@ describe('plan lifecycle HTTP API', () => {
          '2026-07-24T12:00:00Z', '2026-07-25T12:00:00Z', '2026-07-26T00:00:00Z', '2026-07-29T00:00:00Z', true,
          '{"plan":{"id":"bypass-active-b","userId":"user-1","status":"ACTIVE","effectiveAt":"2026-07-26T00:00:00.000Z","effectiveTo":"2026-07-29T00:00:00.000Z"},"contentMode":"REVIEWED","createdBy":"operations"}');
     `);
+    // both bypassed ACTIVE windows must genuinely contain the injected trusted clock
+    expect(trustedNow.getTime()).toBeGreaterThanOrEqual(new Date('2026-07-26T00:00:00.000Z').getTime());
+    expect(trustedNow.getTime()).toBeLessThan(new Date('2026-07-28T00:00:00.000Z').getTime());
 
     await agent.get('/api/v1/users/user-1/plans/current')
       .set('Authorization', `Bearer ${tokens.get('user-1')}`)

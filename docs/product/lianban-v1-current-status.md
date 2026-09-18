@@ -1,14 +1,14 @@
 # 练伴当前工作状态摘要
 
-更新时间：2026-09-17<br>
+更新时间：2026-09-18<br>
 用途：新任务的短上下文入口，不替代 PRD、验收台账或专项计划。
 
 ## 当前快照
 
 - 工作目录：`D:\project\Fittness project`
 - 分支：`codex/ui-ux-spec`
-- 最新提交：`c6dcb77 feat(p11): capture dual-fixture local evidence flows`；2026-09-17 交接与预审文档批次以 `git log` 为准
-- 工作树：P11 实现与证据已进入 `c6dcb77`；2026-09-17 交接文档、生命周期预审报告及台账/工作日志/状态同步已合并提交；工作树仅余与练伴无关的未跟踪 `%SystemDrive%/` 和 `SHAP_学术研究方法论_可编辑公式.docx`。不得 reset、checkout、清理、盲目暂存或触碰无关内容。
+- 最新提交：`586540a docs(p08-p10): add model continuation handoff and fixed-date regression preflight`；生命周期时钟注入修复批次见其后提交
+- 工作树：P11 实现与证据已进入 `c6dcb77`；2026-09-17 交接/预审与 2026-09-18 时钟注入修复均已提交；工作树仅余与练伴无关的未跟踪 `%SystemDrive%/` 和 `SHAP_学术研究方法论_可编辑公式.docx`。不得 reset、checkout、清理、盲目暂存或触碰无关内容。
 - 当前产品状态：G0 通过；G1 仅允许本地演示和安全结构施工；G2 未达到；G3 禁止；`readyForRealUsers=false`。
 
 ## 最近证据
@@ -21,12 +21,13 @@
 - P11 runtime bridge：工程计划记录真实 PG18 named test `1 passed`、API typecheck/build/diff-check 通过、临时库为 `0`，并有 Sol `GREEN / ALLOW`；证据仅限 test-only bridge。
 - P11 本地可操作结构：test-only runtime、schema-driven P11 record client/page、双 fixture selector 与 loopback launcher已按命名切片收口；API runtime focused `5 passed`，Web focused `43 passed`，launcher lifecycle `7 passed`，API/Web typecheck/build 和 production-bundle exclusion 通过；本机 in-app browser 实际完成减脂与增肌各一次写入、权威重读及回看隔离，双路线截图留存在 `docs/engineering/evidence/`；最终只读边界为 QA `QA_CLEAR`、UI `UI_CLEAR`、本地运维 `LOCAL_SLICE_CLEAR`、安全 `SECURITY_NO_OBJECTION`、专业 `PROFESSIONAL_CLEAR`，新 Sol Critical 为 0/0/0 并结论 `GREEN / ALLOW — P11_DUAL_FIXTURE_LOCAL_OPERABLE_STRUCTURE_REVIEW_COMPLETE`。证据层仅为 `BROWSER`、`CROSS_LAYER_E2E`、`PG18_REPOSITORY`、`UI_STATE`；本场景 `BROWSER` 不代表 Edge/Narrator 或 P19 无障碍复验，生产运维仍为 `OPERATIONS_BLOCKED`。
 - 当前隔离 PG18 全量单 worker 回归为 `65/66 files`、`797/806 tests`；9 项失败全部位于旧 `apps/api/test/plan-lifecycle.e2e.spec.ts`，其固定 2026-07/08 窗口与 2026-09-05 数据库可信时间冲突。较早的共享数据库中断运行曾需受控清理 1 个生成库；最终 port-5433 全量运行自动清理至 `lianban_%` 为 0。上述仓库级阻断不改写为通过，也不属于已收口的 P11 本地可操作切片。
-- 2026-09-17 只读预审已确认上述 9 项失败根因：受影响测试未注入 `planClock`，发布 lead-time（8 项，自 2026-08-08T12:00Z 起注定 409）与多 ACTIVE 读守卫（1 项，自 2026-07-29 起注定 200）按真实时间 fail closed 属正确生产行为；生产代码自 2026-07-26 无改动。报告见 `docs/engineering/plans/2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`；test-only 时钟注入修复未执行，待另行授权。
+- 2026-09-17 只读预审已确认上述 9 项失败根因：受影响测试未注入 `planClock`，发布 lead-time（8 项，自 2026-08-08T12:00Z 起注定 409）与多 ACTIVE 读守卫（1 项，自 2026-07-29 起注定 200）按真实时间 fail closed 属正确生产行为；生产代码自 2026-07-26 无改动。报告见 `docs/engineering/plans/2026-09-17-plan-lifecycle-fixed-date-regression-preflight.md`；修复已于 2026-09-18 执行并收口（见下条）。
+- 2026-09-18 生命周期固定日期修复（`PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION`）：九个 fixture 注入 test-only `planClock` 并新增窗口真值断言；focused `36/36 passed`、typecheck/build `EXIT=0`，该文件在全量运行中亦 `36 tests ✓`；全量单 worker `60/66 files`、`673/806 tests`，6 个失败文件全部为本机 PG18 服务停止导致的 `ECONNREFUSED 127.0.0.1:5432`（基础设施阻断，待服务启动后复跑）；未改生产代码，状态 `REVIEW_PENDING`（ZCode 自审）。
 - P19 浏览器与无障碍：验收台账标记通过，范围限 Edge、Narrator、键盘、六视口、200% 缩放和 reduced-motion 证据；不外推真人服务或 G2/G3。
 
 ## 当前活动边界
 
-- 最近唯一活动场景 `PLAN-LIFECYCLE-FIXED-DATE-REGRESSION-PREFLIGHT`（只读预审）已于 2026-09-17 按授权范围收口并停止；修复场景未授权，当前没有自动开启的下一场景。
+- 最近活动场景 `PLAN-LIFECYCLE-FIXED-DATE-FIXTURE-CLOCK-INJECTION`（test-only 时钟注入修复）已于 2026-09-18 按授权范围执行完毕并停止（`REVIEW_PENDING`）；当前没有自动开启的下一场景。
 - 2026-09-17 已生成短交接 `docs/product/lianban-v1-handoff-2026-09-17.md`；交接与预审均由 ZCode 按用户委托执行，边界自审结论标注为 ZCode 自审。
 - 同日验收台账与工作日志已覆盖此前“其后没有新的场景授权”的旧交接表述；该文档差异已在本轮同步，不得据此开启第二个场景。
 - 不得同时推进 P11 消息生产化、P16 真实数据权利、其他浏览器/部署/staging、生产、真人、G2 或 G3。
@@ -36,8 +37,8 @@
 - P11 总体双路线业务闭环、正式记录 API/数据库接入、生产消息 API、真实数据权利处理和真人门禁未完成。
 - P12 周反馈/周调整、P13 风险暂停/恢复、P14 真实工作队列、P17 审计查询、P20 运维恢复、P21 四周指标未完成。
 - 专业规则、认证安全/MFA、隐私合规、数据权利演练、备份恢复、运营值班和部署安全证据未全部关闭。
-- 当前工作树未形成新的稳定提交；任何旧测试数字都只能作为历史证据，不能替代当前复跑。
-- 仓库全量回归仍有 9 项旧 plan-lifecycle 固定日期失败；根因已于 2026-09-17 预审确认为测试时钟未注入、夹具窗口老化，test-only 修复待另行授权，当前场景不得据此宣称仓库全绿。
+- 工作树改动均已形成提交（交接/预审 `586540a`、时钟注入修复批次）；任何旧测试数字都只能作为历史证据，不能替代当前复跑。
+- 仓库全量回归原有 9 项旧 plan-lifecycle 固定日期失败已由 test-only 时钟注入修复（2026-09-18，`REVIEW_PENDING`）；全量复跑待本机 PG18 启动后进行，当前不得据此宣称仓库全绿。
 
 ## 新任务最小读取集
 
