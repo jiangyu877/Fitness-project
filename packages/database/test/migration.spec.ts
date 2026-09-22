@@ -413,6 +413,26 @@ describe('core database migration', () => {
       expect.arrayContaining(['idempotency_key', 'canonical_intent', 'raw_entries']),
     );
   });
+
+  it('makes the audit event table append-only', async () => {
+    database = new PGlite();
+    await applyMigrations(database);
+
+    await database.exec(`
+      INSERT INTO audit.audit_event
+        (id, actor_role, action, subject_type, subject_id, request_id, outcome)
+      VALUES ('audit-append-only', 'USER', 'PLAN_CONFIRM_DIET', 'PLAN_VERSION', 'plan-1', 'req-1', 'SUCCEEDED')
+    `);
+    await expect(database.query(
+      `UPDATE audit.audit_event SET action='CHANGED' WHERE id='audit-append-only'`,
+    )).rejects.toThrow(/audit_event is append-only/i);
+    await expect(database.query(
+      `DELETE FROM audit.audit_event WHERE id='audit-append-only'`,
+    )).rejects.toThrow(/audit_event is append-only/i);
+    expect((await database.query(
+      `SELECT action FROM audit.audit_event WHERE id='audit-append-only'`,
+    )).rows).toEqual([{ action: 'PLAN_CONFIRM_DIET' }]);
+  });
 });
 
 async function seedPlan(target: PGlite): Promise<void> {

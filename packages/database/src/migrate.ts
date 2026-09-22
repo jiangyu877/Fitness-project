@@ -56,6 +56,10 @@ const migrations = [
     version: '011_p11_record_persistence',
     file: '011_p11_record_persistence.sql',
   },
+  {
+    version: '012_audit_append_only',
+    file: '012_audit_append_only.sql',
+  },
 ] as const;
 
 export type MigrationVersion = (typeof migrations)[number]['version'];

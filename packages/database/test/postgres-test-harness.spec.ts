@@ -252,6 +252,7 @@ describe.runIf(Boolean(adminUrl)).sequential('P11 isolated PostgreSQL lifecycle'
         '009_plan_lifecycle_persistence',
         '010_p07_safe_structure',
         '011_p11_record_persistence',
+        '012_audit_append_only',
       ]);
     });
   });

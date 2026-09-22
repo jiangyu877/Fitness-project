@@ -113,4 +113,21 @@ describe.runIf(Boolean(adminUrl)).sequential('P17 audit query read-only contract
       expect(before.count).toBe(4);
     });
   });
+
+  it('rejects mutation of audit rows after append-only enforcement', async () => {
+    await withAuditPostgres(adminUrl!, async (pool) => {
+      await seedAuditEvents(pool);
+      await expect(pool.query(`UPDATE audit.audit_event SET action='CHANGED' WHERE id='audit-1'`))
+        .rejects.toThrow(/audit_event is append-only/i);
+      await expect(pool.query(`DELETE FROM audit.audit_event WHERE id='audit-1'`))
+        .rejects.toThrow(/audit_event is append-only/i);
+      expect((await pool.query(`SELECT action FROM audit.audit_event WHERE id='audit-1'`)).rows)
+        .toEqual([{ action: 'PLAN_CONFIRM_DIET' }]);
+      await pool.query(
+        `INSERT INTO audit.audit_event (id, actor_role, action, subject_type, subject_id, request_id)
+         VALUES ('audit-5','USER','PLAN_CONFIRM_TRAINING','PLAN_VERSION','plan-v1','req-5')`,
+      );
+      expect((await auditTableDigest(pool)).count).toBe(5);
+    });
+  });
 });
