@@ -27,11 +27,12 @@
 - 2026-09-18 P12 首个切片（`P12-WEEKLY-FEEDBACK-STRUCTURE`）：test-only 周反馈结构契约——周窗口推导（4 周 × 7 天 Shanghai）、9 字段清单、数据事实→充分性注入式判定（fail closed）、PRD §6.4 数据不足硬限制（仅 `KEEP_CORE_PLAN`/`RESOLVE_EXECUTION_FRICTION`）、疼痛 `REPORTED` → `RISK_HANDOFF`、采纳记录结构；focused `8/8`、typecheck/build `EXIT=0`、全量单 worker `68/68 files`、`819/819 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - 2026-09-18 P12 第二个切片（`P12-WEEKLY-ADJUSTMENT-DRAFT-FLOW`）：周调整版本完整复用冻结生命周期流程（双审核→发布待确认→双确认→到时生效→取代旧版本），携带 `WEEKLY_ADJUSTMENT` 源类型与采纳记录链接（反馈周/结果/字段 → 新旧版本）；focused `37/37`、typecheck/build `EXIT=0`、全量单 worker `68/68 files`、`820/820 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - 2026-09-18 P12 第三个切片（`P12-WEEKLY-FEEDBACK-UI-STATE`）：H5-REC-05 页面渲染契约（test-only `UI_STATE`）——严格解析服务端视图信封、冻结状态优先级（疼痛 > 调整等待 > 窗口关闭 > 数据不足 > 表单开放）、动作完全由服务端 `allowedOutcomes` 驱动、畸形一律 fail closed；focused `10/10`、Web 回归 `99/99`、typecheck/build `EXIT=0`、全量单 worker `70/70 files`、`830/830 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
+- 2026-09-18 P17 首个切片（`P17-AUDIT-QUERY-READONLY`）：test-only 审计只读查询契约——严格过滤器（有界 limit 1..100、ISO 时间、枚举）、稳定排序、最小披露投影、零写入证明；focused `5/5`、typecheck/build `EXIT=0`、全量单 worker `71/71 files`、`835/835 tests`；**预审发现 `audit.audit_event` 无不可覆盖触发器（append-only 强制缺失），列为后续迁移缺口**；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - P19 浏览器与无障碍：验收台账标记通过，范围限 Edge、Narrator、键盘、六视口、200% 缩放和 reduced-motion 证据；不外推真人服务或 G2/G3。
 
 ## 当前活动边界
 
-- 最近活动场景 `P12-WEEKLY-FEEDBACK-UI-STATE`（P12 第三个 test-only 切片）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；上一场景 `P12-WEEKLY-ADJUSTMENT-DRAFT-FLOW` 已同样收口；当前没有自动开启的下一场景。
+- 最近活动场景 `P17-AUDIT-QUERY-READONLY`（P17 首个 test-only 切片）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；上一场景 `P12-WEEKLY-FEEDBACK-UI-STATE` 已同样收口；当前没有自动开启的下一场景。
 - 2026-09-17 已生成短交接 `docs/product/lianban-v1-handoff-2026-09-17.md`；交接与预审均由 ZCode 按用户委托执行，边界自审结论标注为 ZCode 自审。
 - 同日验收台账与工作日志已覆盖此前“其后没有新的场景授权”的旧交接表述；该文档差异已在本轮同步，不得据此开启第二个场景。
 - 不得同时推进 P11 消息生产化、P16 真实数据权利、其他浏览器/部署/staging、生产、真人、G2 或 G3。

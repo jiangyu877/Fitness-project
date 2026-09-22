@@ -39,7 +39,7 @@
 | P14 | Web 工作队列与共享详情 | 施工中 | 风险/逾期/优先级排序、权限过滤、详情上下文及失败保留筛选 | 已有演示页面，尚无真实队列闭环 |
 | P15 | 消息已读与安全深链 | 施工中 | 已读、重读目标状态、失效和越权处理 | test-only API contract fixture、UI consumer/state和竞态证据已通过Sol；生产消息API、真人深链、browser完整验收未完成 |
 | P16 | 数据导出、删除、匿名化与留存 | 施工中 | 双端请求、身份核验、7 日处理、冻结例外、定时处理和演练证据 | P11-DUAL-FIXTURE-DATA-RIGHTS-STATE test-only EXPORT/DELETE/ANONYMIZE 状态 fixture 与 UI 消费已通过 QA、安全、专业、UI、运营及新 Sol Critical：`GREEN / ALLOW — P11_DUAL_FIXTURE_DATA_RIGHTS_STATE_REVIEW_COMPLETE`；API fixture `6 passed / 0 skipped`、reducer/UI `20 passed`、Web `28 files / 272 passed / 0 failed`。该证据仅收口双 persona 状态合同；真实导出包、删除/匿名化、留存调度、数据权利演练和隐私合规门禁未完成。 |
-| P17 | 测试账号与审计查询 | 未开始 | 创建/重置/解锁/停用；审计只读、脱敏、不可覆盖 | P1 最小能力，真人测试前必须满足安全门槛 |
+| P17 | 测试账号与审计查询 | 施工中 | 创建/重置/解锁/停用；审计只读、脱敏、不可覆盖 | P1 最小能力，真人测试前必须满足安全门槛；2026-09-18 首个 test-only 切片 `P17-AUDIT-QUERY-READONLY` 收口：严格过滤器/有界 limit/稳定排序/最小披露投影/零写入证明，focused `5/5`、全量 `71/71 files`；**预审发现 `audit.audit_event` 无任何不可覆盖触发器（表级 append-only 强制缺失），补强制需迁移，列为后续独立授权缺口**；测试账号创建/重置/解锁/停用与生产查询接线仍未实现 |
 | P18 | 错误、幂等、版本冲突和可追溯审计 | 施工中 | 稳定错误结构、关键写操作幂等、版本冲突、requestId 和审计事件 | 身份与持久化计划 HTTP 已覆盖稳定错误、主体/目标作用域幂等、并发冲突、独立审计 ID、可信 actor、拒绝审计和 OpenAPI；缺失写头稳定返回结构化 422，UI 不再自行推导 RETRY；审计查询、其余 P0 写路径及最终独立复核仍待完成 |
 | P19 | 可访问性与浏览器/视口验收 | 通过 | 360/390/430、1024/1280/1440；Edge + Narrator、键盘、焦点、播报、200% 缩放、减少动态 | Edge 本地已实测冻结 32 路由：H5 19 路由在 CSS 360/390/430、Web 13 路由在 CSS 1024/1280/1440 均非空、有 H1 且无水平溢出；Edge 200% 等效约 195px、键盘 `:focus-visible`、44px 触控和 reduced-motion 规则已有证据。项目发起人确认 Edge + Narrator 实时播报、人工键盘和无障碍确认已完成，质量与无障碍部独立复核结论为 `QA_CLEAR / P19_ACCESSIBILITY_REVIEW_COMPLETE`。经用户范围调整不使用 Chrome；该结论仅限 P19，不外推真人服务、G2/G3、release 或 `readyForRealUsers`。 |
 | P20 | 运维、备份恢复、监控与回滚 | 未开始 | HTTPS、备份恢复演练、错误追踪、告警、回滚、运营手册 | 部署地域、预算、域名与值班链属于外部门禁 |
