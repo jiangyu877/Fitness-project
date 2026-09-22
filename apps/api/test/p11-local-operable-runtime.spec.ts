@@ -4,6 +4,7 @@ import {
   startP11LocalOperableRuntime,
   type P11LocalOperableRuntime,
 } from './support/p11-local-operable-runtime.js';
+import { generatedTaskId } from './support/p10-task-generation.js';
 
 const adminUrl = process.env.P11_LOCAL_POSTGRES_ADMIN_URL ?? process.env.LIANBAN_TEST_POSTGRES_ADMIN_URL;
 
@@ -22,6 +23,30 @@ describe.runIf(Boolean(adminUrl))('P11 local operable runtime', () => {
     ]);
     expect(new Set(fixtures.map((fixture) => fixture.taskId)).size).toBe(2);
     expect(fixtures.every((fixture) => fixture.accountId && fixture.sessionToken && fixture.expiresAt)).toBe(true);
+  });
+
+  it('serves generated structural tasks for both personas', async () => {
+    runtime = await startP11LocalOperableRuntime({ adminUrl: adminUrl!, port: 0 });
+    const fixtures = await runtime.fixtureManifest();
+    const response = await fetch(`${runtime.baseUrl}/p11-local/tasks`);
+    const payload = await response.json();
+    expect(response.status, JSON.stringify(payload)).toBe(200);
+    expect(payload.testOnly).toBe(true);
+    expect(payload.fixtures).toHaveLength(2);
+    for (const entry of payload.fixtures as Array<{ tasks: Array<Record<string, string>> }>) {
+      expect(entry.tasks).toHaveLength(28);
+      expect(entry.tasks[0]).toMatchObject({
+        businessDate: '2026-01-01', taskState: 'OPEN', dateState: 'OPEN', riskState: 'CLEAR',
+      });
+      expect(entry.tasks.at(-1)).toMatchObject({ businessDate: '2026-01-28' });
+      expect(Object.keys(entry.tasks[0]!).sort()).toEqual([
+        'businessDate', 'dateState', 'riskState', 'taskId', 'taskState',
+      ]);
+    }
+    const fatLoss = fixtures.find((fixture) => fixture.fixtureId === 'persona_fat_loss');
+    expect(fatLoss?.taskId).toBe(generatedTaskId('p11-local-plan-version-fat-loss', '2026-01-02'));
+    expect(new Set((payload.fixtures as Array<{ tasks: Array<{ taskId: string }> }>)
+      .flatMap((entry) => entry.tasks.map((task) => task.taskId))).size).toBe(56);
   });
 
   it('writes independently through the local API and authoritative PG18 context', async () => {

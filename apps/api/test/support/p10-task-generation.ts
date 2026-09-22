@@ -49,6 +49,8 @@ export type TaskGenerationInput = {
   userId: string;
   trustedNow: Date;
   schemaVersion: string;
+  /** Optional cap on how many of the window's first business dates are generated. */
+  maxBusinessDates?: number;
 };
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -95,7 +97,14 @@ export async function generateActiveWindowTasks(
   if (resolved.status !== 'ACTIVE') return { outcome: 'REFUSED', reason: 'PLAN_GAP' };
 
   const plan = resolved.plan;
-  const businessDates = businessDatesForWindow(plan.effectiveAt, plan.effectiveTo);
+  const windowDates = businessDatesForWindow(plan.effectiveAt, plan.effectiveTo);
+  if (input.maxBusinessDates !== undefined
+    && (!Number.isInteger(input.maxBusinessDates) || input.maxBusinessDates < 1)) {
+    throw new Error('P10_TASK_GENERATION_LIMIT_INVALID');
+  }
+  const businessDates = input.maxBusinessDates === undefined
+    ? windowDates
+    : windowDates.slice(0, input.maxBusinessDates);
   const gate = await pool.query<{ revision: number }>(
     `SELECT current_revision::integer AS revision FROM recording.p11_write_gate WHERE id='P11_RECORD_WRITE'`);
   const revision = gate.rows[0]?.revision;

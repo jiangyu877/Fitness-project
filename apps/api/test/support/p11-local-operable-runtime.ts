@@ -6,6 +6,7 @@ import { Pool, type PoolClient } from 'pg';
 import type { INestApplication } from '@nestjs/common';
 
 import { buildApplication } from '../build-test-application.js';
+import { generateActiveWindowTasks, generatedTaskId } from './p10-task-generation.js';
 import type { Environment } from '../../src/config/environment.js';
 import { DatabaseService } from '../../src/database/database.service.js';
 import type { P11RecordPortSchema } from '../../src/records/p11-record-repository.port.js';
@@ -94,6 +95,7 @@ export async function startP11LocalOperableRuntime(options: {
       recordContextPool: targetPool,
     });
     await seedApi(app);
+    const surfacePool = targetPool;
     const nestHandler = app.getHttpAdapter().getInstance() as (
       request: IncomingMessage,
       response: ServerResponse,
@@ -103,6 +105,10 @@ export async function startP11LocalOperableRuntime(options: {
         const body = JSON.stringify({ testOnly: true, fixtures: fixtures.map(publicFixture) });
         response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
         response.end(body);
+        return;
+      }
+      if (request.method === 'GET' && request.url === '/p11-local/tasks') {
+        void respondTaskSurface(surfacePool, response);
         return;
       }
       if (request.method === 'POST' && request.url === '/p11-local/shutdown') {
@@ -157,7 +163,7 @@ function runtimeFixture(
     fixtureId,
     goalType,
     accountId: `p11-local-user-${label}`,
-    taskId: `p11-local-task-${label}`,
+    taskId: generatedTaskId(`p11-local-plan-version-${label}`, '2026-01-02'),
     sessionToken: `p11-local-session-token-${label}`,
     expiresAt: '2099-01-01T00:00:00.000Z',
     sessionId: `p11-local-session-${label}`,
@@ -181,6 +187,38 @@ function publicFixture(fixture: RuntimeFixture): P11LocalFixture {
 
 function allowProtectedRoutes(): RouteAccessSnapshot {
   return Object.freeze({ audience: 'TEST', blockers: Object.freeze([]), allowProtectedRoutes: true });
+}
+
+async function respondTaskSurface(pool: Pool, response: ServerResponse): Promise<void> {
+  try {
+    const rows = await pool.query<{
+      userId: string; taskId: string; businessDate: string;
+      taskState: string; dateState: string; riskState: string;
+    }>(
+      `SELECT user_id AS "userId", id AS "taskId", business_date::text AS "businessDate",
+         task_state AS "taskState", date_state AS "dateState", risk_state AS "riskState"
+       FROM recording.record_task
+       WHERE user_id = ANY($1::text[])
+       ORDER BY user_id, business_date`,
+      [fixtures.map((fixture) => fixture.accountId)],
+    );
+    const body = JSON.stringify({
+      testOnly: true,
+      fixtures: fixtures.map((fixture) => ({
+        fixtureId: fixture.fixtureId,
+        tasks: rows.rows
+          .filter((row) => row.userId === fixture.accountId)
+          .map(({ taskId, businessDate, taskState, dateState, riskState }) => ({
+            taskId, businessDate, taskState, dateState, riskState,
+          })),
+      })),
+    });
+    response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    response.end(body);
+  } catch {
+    response.writeHead(500, { 'content-length': '0' });
+    response.end();
+  }
 }
 
 async function seedPostgres(pool: Pool): Promise<void> {
@@ -212,13 +250,13 @@ async function seedPostgres(pool: Pool): Promise<void> {
       fixture.planVersionId, fixture.planId, fixture.accountId,
       JSON.stringify({ fixtureId: fixture.fixtureId, goalType: fixture.goalType, demoOnly: true }),
     ]);
-    await pool.query(`INSERT INTO recording.record_task
-      (id, user_id, plan_id, plan_version_id, business_date, schema_version,
-       gate_id, gate_revision, close_policy, task_state, date_state, risk_state)
-      VALUES ($1,$2,$3,$4,DATE '2026-01-02','schema-v1',
-        'P11_RECORD_WRITE',1,'TEST_ONLY_EXPLICIT','OPEN','OPEN','CLEAR')`, [
-      fixture.taskId, fixture.accountId, fixture.planId, fixture.planVersionId,
-    ]);
+    const generation = await generateActiveWindowTasks(pool, {
+      userId: fixture.accountId,
+      trustedNow: new Date('2026-01-02T12:00:00.000Z'),
+      schemaVersion: 'schema-v1',
+      maxBusinessDates: 28,
+    });
+    if (generation.outcome !== 'GENERATED') throw new Error('P11_LOCAL_TASK_GENERATION_REFUSED');
   }
 }
 
