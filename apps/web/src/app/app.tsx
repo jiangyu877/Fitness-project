@@ -67,6 +67,9 @@ const DevelopmentPersonaSwitcher = import.meta.env.DEV
 const LocalP11RuntimePage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
   ? React.lazy(() => import('../features/p11-local/p11-local-runtime-page.js').then((module) => ({ default: module.P11LocalRuntimePage })))
   : null;
+const LocalP11TodayPage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
+  ? React.lazy(() => import('../features/p11-local/p11-local-today-page.js').then((module) => ({ default: module.P11LocalTodayPage })))
+  : null;
 
 export type { DemoRuntimeEnvironment } from '../mocks/personas.js';
 
@@ -339,6 +342,7 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
   const detailVersion = planDetailVersion(location.pathname);
   const p11RecordRoute = resolveP11RecordRoute(location.pathname, location.search);
   const localP11Path = location.pathname === '/h5/p11-local' && demoEnvironment.mode === 'test' && LocalP11RuntimePage !== null;
+  const localP11TodayPath = location.pathname === '/h5/p11-local/today' && demoEnvironment.mode === 'test' && LocalP11TodayPage !== null;
   const [recoveryPending, setRecoveryPending] = useState(() => !localP11Path && identityClient.hasStoredSession());
   const [recoveryError, setRecoveryError] = useState<IdentityError>();
   const [restoredSession, setRestoredSession] = useState<RestoredUserSession>();
@@ -376,6 +380,22 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
     message={recoveryError.message}
     {...(recoveryError.recoverableActions.includes('RETRY') ? { onRetry: restore } : {})}
   /></main></div>;
+  if (localP11TodayPath && LocalP11TodayPage) {
+    return <div className="h5-viewport"><main className="h5-main"><Suspense fallback={<div className="generic-page generic-page--h5" role="status">P11_LOCAL_RUNTIME_LOADING</div>}>
+      <LocalP11TodayPage onOpen={(fixture) => {
+        setRestoredSession({
+          kind: 'session-created', accountId: fixture.accountId, token: fixture.sessionToken,
+          expiresAt: fixture.expiresAt, nextAction: 'VIEW_TODAY',
+        });
+        try {
+          sessionStorage.setItem('lianban.user-session', JSON.stringify({ token: fixture.sessionToken, expiresAt: fixture.expiresAt }));
+        } catch {
+          // The mounted test runtime still carries the trusted session in memory.
+        }
+        navigate(`/h5/records?taskId=${encodeURIComponent(fixture.taskId)}`, { replace: true });
+      }} />
+    </Suspense></main></div>;
+  }
   if (localP11Path && LocalP11RuntimePage) {
     return <div className="h5-viewport"><main className="h5-main"><Suspense fallback={<div className="generic-page generic-page--h5" role="status">P11_LOCAL_RUNTIME_LOADING</div>}>
       <LocalP11RuntimePage onOpen={(fixture) => {

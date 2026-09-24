@@ -54,7 +54,7 @@ function parseFixture(value: unknown): P11LocalFixture {
   };
 }
 
-function parseManifest(value: unknown): readonly P11LocalFixture[] {
+export function parseManifest(value: unknown): readonly P11LocalFixture[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
   const manifest = value as Record<string, unknown>;
   const keys = Object.keys(manifest);
