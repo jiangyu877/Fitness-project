@@ -36,9 +36,9 @@ STOP: 需改生产控制器/契约/迁移/门禁、需专业内容、需放开 G
 | RED | `npx --no-install vitest run apps/web/src/features/p11-local --maxWorkers=1 --minWorkers=1` | 新规格失败 | `UI_STATE` | **已完成（2026-09-18）：新规格无法解析模块（`Failed to resolve import`）、既有 5 项通过** |
 | GREEN | 同上 | 全部通过（既有规格保持） | `UI_STATE` | **已完成：`7/7 passed`（新今日页 2 + 既有运行时页 5）** |
 | 运行时回归 | `npx --no-install vitest run apps/api/test/p11-local-operable-runtime.spec.ts apps/api/test/p11-local-launcher.spec.ts --maxWorkers=1 --minWorkers=1` | 保持通过 | 混合 | **已完成：`13/13 passed`** |
-| 浏览器 | 启动 `dev:p11-local`（私设管理员 URL）+ 打开 `/h5/p11-local/today` | 两 persona 任务列表可见；点击任务进入记录页 | `BROWSER` | **未执行（阻断）：本机 PG18 服务已停止（`ECONNREFUSED 127.0.0.1:5432`），启动需管理员权限；运行时依赖 PG18 才能启动。首次截图误捕到连接失败页，已删除，不记为证据** |
+| 浏览器 | 启动 `dev:p11-local`（私设管理员 URL）+ 打开 `/h5/p11-local/today` | 两 persona 任务列表可见；点击任务进入记录页 | `BROWSER` | **已完成（2026-09-18，PG18 启动后补）：运行时真实启动（`P11_LOCAL_RUNTIME_READY` + `P11_LOCAL_WEB_READY`，代理探测 200），真实 Edge 窗口渲染 `/h5/p11-local/today` 显示演示免责声明与减脂测试路径的**生成任务按钮**（`2026-01-01` 起），截图 `docs/engineering/evidence/p11-local-today-tasks-2026-09-18.png`（`PrintWindow` 窗口级捕获，无桌面内容）。**点击穿透未取得浏览器证据**：会话由页面点击建立，直开记录 URL 仅得到设计内的 `P11_SESSION_REQUIRED` fail-closed 状态（该截图已删除，不作证据）；点击接线由 `UI_STATE` 命名测试覆盖。无头模式的异步取数竞态导致两次无效捕获，均已删除不记证据。** |
 | 类型/构建 | `npm run typecheck`；`npm run build` | 通过 | — | **已完成：两项 `EXIT=0`** |
-| 全量回归 | `npm test -- --maxWorkers=1 --minWorkers=1` | `73/73 files`（新增 1 文件），0 失败；临时库归零 | 混合 | **未执行（阻断）：同上，PG18 停止导致 PG18 依赖规格必然基础设施失败，不得记为回归结果** |
+| 全量回归 | `npm test -- --maxWorkers=1 --minWorkers=1` | `73/73 files`（新增 1 文件），0 失败；临时库归零 | 混合 | **已完成：`73/73 files`、`845/845 tests`、`EXIT=0`，临时库 `lianban_%` = 0** |
 | FROZEN | 生产控制器/契约/迁移/门禁、既有页面行为与规格、其他场景 | 不修改 | — | 冻结 |
 
 ## 5. 命名测试（冻结）
