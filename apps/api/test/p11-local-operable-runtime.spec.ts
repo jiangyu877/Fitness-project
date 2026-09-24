@@ -49,6 +49,45 @@ describe.runIf(Boolean(adminUrl))('P11 local operable runtime', () => {
       .flatMap((entry) => entry.tasks.map((task) => task.taskId))).size).toBe(56);
   });
 
+  it('serves the weekly feedback view and records a submission', async () => {
+    runtime = await startP11LocalOperableRuntime({ adminUrl: adminUrl!, port: 0 });
+    const fixtures = await runtime.fixtureManifest();
+    const initial = await (await fetch(`${runtime.baseUrl}/p11-local/weekly-feedback`)).json();
+    expect(initial.testOnly).toBe(true);
+    expect(initial.fixtures).toHaveLength(2);
+    for (const entry of initial.fixtures as Array<{ view: Record<string, unknown> }>) {
+      expect(entry.view).toMatchObject({
+        windowState: 'OPEN', weekIndex: 1, sufficiency: 'SUFFICIENT', painState: 'CLEAR',
+        submissionState: 'NONE', nextWindowAt: null,
+      });
+      expect((entry.view.fields as unknown[]).length).toBe(9);
+      expect((entry.view.allowedOutcomes as unknown[]).length).toBeGreaterThan(0);
+    }
+    const [fatLoss] = fixtures;
+    const submit = await fetch(`${runtime.baseUrl}/p11-local/weekly-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fixtureId: fatLoss!.fixtureId, requestedOutcome: 'CHANGE_TRAINING_CONTENT' }),
+    });
+    expect(submit.status).toBe(200);
+    await expect(submit.json()).resolves.toMatchObject({
+      testOnly: true, outcome: 'ADJUSTMENT_PENDING',
+    });
+    const after = await (await fetch(`${runtime.baseUrl}/p11-local/weekly-feedback`)).json();
+    const updated = (after.fixtures as Array<{ fixtureId: string; view: { submissionState: string } }>)
+      .find((entry) => entry.fixtureId === fatLoss!.fixtureId);
+    expect(updated?.view.submissionState).toBe('ADJUSTMENT_PENDING');
+    const other = (after.fixtures as Array<{ fixtureId: string; view: { submissionState: string } }>)
+      .find((entry) => entry.fixtureId !== fatLoss!.fixtureId);
+    expect(other?.view.submissionState).toBe('NONE');
+    const blocked = await fetch(`${runtime.baseUrl}/p11-local/weekly-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fixtureId: fixtures[1]!.fixtureId, requestedOutcome: 'SHRINK_CALORIES' }),
+    });
+    await expect(blocked.json()).resolves.toMatchObject({ testOnly: true, outcome: 'BLOCKED' });
+  });
+
   it('writes independently through the local API and authoritative PG18 context', async () => {
     runtime = await startP11LocalOperableRuntime({ adminUrl: adminUrl!, port: 0 });
     const fixtureResponse = await fetch(`${runtime.baseUrl}/p11-local/fixtures`);

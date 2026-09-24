@@ -70,6 +70,9 @@ const LocalP11RuntimePage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
 const LocalP11TodayPage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
   ? React.lazy(() => import('../features/p11-local/p11-local-today-page.js').then((module) => ({ default: module.P11LocalTodayPage })))
   : null;
+const LocalP11WeeklyFeedbackPage = import.meta.env.VITE_P11_LOCAL_RUNTIME === 'true'
+  ? React.lazy(() => import('../features/p11-local/p11-local-weekly-feedback-page.js').then((module) => ({ default: module.P11LocalWeeklyFeedbackPage })))
+  : null;
 
 export type { DemoRuntimeEnvironment } from '../mocks/personas.js';
 
@@ -343,6 +346,7 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
   const p11RecordRoute = resolveP11RecordRoute(location.pathname, location.search);
   const localP11Path = location.pathname === '/h5/p11-local' && demoEnvironment.mode === 'test' && LocalP11RuntimePage !== null;
   const localP11TodayPath = location.pathname === '/h5/p11-local/today' && demoEnvironment.mode === 'test' && LocalP11TodayPage !== null;
+  const localP11WeeklyPath = location.pathname === '/h5/p11-local/weekly-feedback' && demoEnvironment.mode === 'test' && LocalP11WeeklyFeedbackPage !== null;
   const [recoveryPending, setRecoveryPending] = useState(() => !localP11Path && identityClient.hasStoredSession());
   const [recoveryError, setRecoveryError] = useState<IdentityError>();
   const [restoredSession, setRestoredSession] = useState<RestoredUserSession>();
@@ -380,6 +384,11 @@ export function AppRoutes({ demoEnvironment = runtimeDemoEnvironment, identityCl
     message={recoveryError.message}
     {...(recoveryError.recoverableActions.includes('RETRY') ? { onRetry: restore } : {})}
   /></main></div>;
+  if (localP11WeeklyPath && LocalP11WeeklyFeedbackPage) {
+    return <div className="h5-viewport"><main className="h5-main"><Suspense fallback={<div className="generic-page generic-page--h5" role="status">P11_LOCAL_RUNTIME_LOADING</div>}>
+      <LocalP11WeeklyFeedbackPage />
+    </Suspense></main></div>;
+  }
   if (localP11TodayPath && LocalP11TodayPage) {
     return <div className="h5-viewport"><main className="h5-main"><Suspense fallback={<div className="generic-page generic-page--h5" role="status">P11_LOCAL_RUNTIME_LOADING</div>}>
       <LocalP11TodayPage onOpen={(fixture) => {

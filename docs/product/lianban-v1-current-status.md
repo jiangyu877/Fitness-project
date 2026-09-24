@@ -31,12 +31,13 @@
 - 2026-09-18 P17 迁移切片（`P17-AUDIT-APPEND-ONLY-ENFORCEMENT`，首个迁移场景）：`audit.audit_event` 表级不可覆盖强制（触发器镜像既有 append-only 模式）——真实 RED（UPDATE 当前可成功）→ 迁移后 UPDATE/DELETE 拒绝、INSERT 允许；PGlite 迁移套件与隔离 PG18 双证据 `21/21`、typecheck/build `EXIT=0`、全量单 worker `72/72 files`、`842/842 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - 2026-09-18 G2 大目标启动（产品负责人选定路径 C：本地运行时扩展，零门禁放松）：M1 首个切片 `G2-M1-LOCAL-TASK-SURFACE` 收口——本地运行时夹具改由 P10 生成器产出结构化任务、新增测试专用 `GET /p11-local/tasks` 任务面（不透明 id/业务日期/状态）、生成器新增可选 `maxBusinessDates` 上限；RED（404）→ GREEN `6/6`、全量单 worker `72/72 files`、`843/843 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - 2026-09-18 G2-M1b（`G2-M1B-LOCAL-TASK-VIEW`）收口：本地"今日任务"页（严格解析 fixtures/tasks、两 persona 结构任务列表、点击以所选任务打开记录页、fail closed）——web focused `7/7`、运行时/启动器 `13/13`、typecheck/build `EXIT=0`；**`BROWSER`**：运行时真实启动 + 真实 Edge 窗口渲染今日任务页并显示生成任务按钮（证据 `docs/engineering/evidence/p11-local-today-tasks-2026-09-18.png`，窗口级捕获）；全量单 worker `73/73 files`、`845/845 tests`、`EXIT=0`，临时库 0；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
+- 2026-09-18 G2-M2a（`G2-M2A-LOCAL-WEEKLY-FEEDBACK`）收口：本地运行时新增周反馈面（`GET/POST /p11-local/weekly-feedback`，P12 视图信封 + 提交置 `ADJUSTMENT_PENDING`）与 H5 周反馈页（复用 P12 UI 模块，严格 fail-closed 解析）——focused `16/16`、typecheck/build `EXIT=0`；`BROWSER`：真实 Edge 窗口渲染周反馈页（结构字段表单），证据 `docs/engineering/evidence/p11-local-weekly-feedback-2026-09-18.png`；全量单 worker `74/74 files`、`848/848 tests`、`EXIT=0`，临时库 0；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - 2026-09-18 P09 并发守卫切片（`P09-PG18-CONCURRENCY-GUARDS`）：真实 PG18 双连接并发证明 single-ACTIVE / single-pending 唯一索引守卫（`23505` + 约束名、真实锁等待、最终态唯一）、MVCC 无脏读、已发布版本不可变触发器与 CST 截止约束；focused `5/5`、typecheck/build `EXIT=0`、全量单 worker `72/72 files`、`840/840 tests`；`SELF_REVIEW_COMPLETE`（ZCode 自审，产品负责人验收）。
 - P19 浏览器与无障碍：验收台账标记通过，范围限 Edge、Narrator、键盘、六视口、200% 缩放和 reduced-motion 证据；不外推真人服务或 G2/G3。
 
 ## 当前活动边界
 
-- 最近活动场景 `G2-M1B-LOCAL-TASK-VIEW`（G2 大目标 M1 第二个实现切片）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；M1 已完成（任务面 + 今日任务视图）；下一候选为 M2（P12 周反馈/周调整接入运行时）。
+- 最近活动场景 `G2-M2A-LOCAL-WEEKLY-FEEDBACK`（M2 首个实现切片）已于 2026-09-18 按授权范围执行完毕并停止（`SELF_REVIEW_COMPLETE`，ZCode 自审 + 产品负责人验收）；下一候选为 M2b（周调整版本生命周期接入运行时）。
 - 2026-09-17 已生成短交接 `docs/product/lianban-v1-handoff-2026-09-17.md`；交接与预审均由 ZCode 按用户委托执行，边界自审结论标注为 ZCode 自审。
 - 同日验收台账与工作日志已覆盖此前“其后没有新的场景授权”的旧交接表述；该文档差异已在本轮同步，不得据此开启第二个场景。
 - 不得同时推进 P11 消息生产化、P16 真实数据权利、其他浏览器/部署/staging、生产、真人、G2 或 G3。

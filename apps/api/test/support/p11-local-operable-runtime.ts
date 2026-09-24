@@ -7,6 +7,9 @@ import type { INestApplication } from '@nestjs/common';
 
 import { buildApplication } from '../build-test-application.js';
 import { generateActiveWindowTasks, generatedTaskId } from './p10-task-generation.js';
+import {
+  adjustmentOutcomes, createWeeklyFeedbackFixture, requiredWeeklyFeedbackFields, weeklyFeedbackFieldIds,
+} from './p12-weekly-feedback.js';
 import type { Environment } from '../../src/config/environment.js';
 import { DatabaseService } from '../../src/database/database.service.js';
 import type { P11RecordPortSchema } from '../../src/records/p11-record-repository.port.js';
@@ -111,6 +114,14 @@ export async function startP11LocalOperableRuntime(options: {
         void respondTaskSurface(surfacePool, response);
         return;
       }
+      if (request.method === 'GET' && request.url === '/p11-local/weekly-feedback') {
+        respondWeeklyFeedbackView(response);
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/p11-local/weekly-feedback') {
+        void respondWeeklyFeedbackSubmit(request, response);
+        return;
+      }
       if (request.method === 'POST' && request.url === '/p11-local/shutdown') {
         response.writeHead(202, { 'content-length': '0' });
         response.end();
@@ -187,6 +198,91 @@ function publicFixture(fixture: RuntimeFixture): P11LocalFixture {
 
 function allowProtectedRoutes(): RouteAccessSnapshot {
   return Object.freeze({ audience: 'TEST', blockers: Object.freeze([]), allowProtectedRoutes: true });
+}
+
+const weeklyFeedbackFixture = createWeeklyFeedbackFixture({
+  sufficiencyPolicy: () => 'SUFFICIENT',
+});
+const weeklySubmissionStates = new Map<string, 'NONE' | 'ADJUSTMENT_PENDING'>();
+
+function weeklyFeedbackView(fixtureId: string) {
+  return {
+    windowState: 'OPEN' as const,
+    weekIndex: 1,
+    sufficiency: 'SUFFICIENT' as const,
+    painState: 'CLEAR' as const,
+    submissionState: weeklySubmissionStates.get(fixtureId) ?? 'NONE',
+    nextWindowAt: null,
+    fields: weeklyFeedbackFieldIds.map((id) => ({
+      id,
+      required: (requiredWeeklyFeedbackFields as readonly string[]).includes(id),
+    })),
+    allowedOutcomes: [...adjustmentOutcomes],
+  };
+}
+
+function respondWeeklyFeedbackView(response: ServerResponse): void {
+  const body = JSON.stringify({
+    testOnly: true,
+    fixtures: fixtures.map((fixture) => ({
+      fixtureId: fixture.fixtureId,
+      view: weeklyFeedbackView(fixture.fixtureId),
+    })),
+  });
+  response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+  response.end(body);
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(chunk as Buffer);
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+}
+
+async function respondWeeklyFeedbackSubmit(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  try {
+    const payload = await readJsonBody(request);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      response.writeHead(400, { 'content-length': '0' });
+      response.end();
+      return;
+    }
+    const { fixtureId, requestedOutcome } = payload as Record<string, unknown>;
+    const fixture = fixtures.find((candidate) => candidate.fixtureId === fixtureId);
+    if (!fixture) {
+      response.writeHead(404, { 'content-length': '0' });
+      response.end();
+      return;
+    }
+    if (typeof requestedOutcome !== 'string') {
+      response.writeHead(400, { 'content-length': '0' });
+      response.end();
+      return;
+    }
+    // The demo surface submits opaque structural placeholder values for the feedback fields.
+    const fields = Object.fromEntries(weeklyFeedbackFieldIds.map((id) => [
+      id, id === 'pain' ? 'CLEAR' : `local-demo-${id}`,
+    ]));
+    const result = weeklyFeedbackFixture.submit({
+      weekIndex: 1,
+      windowState: 'OPEN',
+      fields,
+      facts: { recordedDays: 7 },
+      requestedOutcome,
+    });
+    if (result.outcome === 'ADJUSTMENT_PENDING') {
+      weeklySubmissionStates.set(fixture.fixtureId, 'ADJUSTMENT_PENDING');
+    }
+    const body = JSON.stringify({ testOnly: true, ...result });
+    response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    response.end(body);
+  } catch {
+    response.writeHead(400, { 'content-length': '0' });
+    response.end();
+  }
 }
 
 async function respondTaskSurface(pool: Pool, response: ServerResponse): Promise<void> {
