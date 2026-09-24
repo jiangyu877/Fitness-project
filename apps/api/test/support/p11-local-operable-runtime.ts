@@ -40,7 +40,10 @@ type RuntimeFixture = P11LocalFixture & Readonly<{
 
 const environment: Environment = {
   nodeEnv: 'test', port: 0, databasePath: `memory://p11-local-${randomUUID()}`, demoMode: false,
-  professionalRulesApproved: false, authSecurityPolicyApproved: true,
+  // Test fixture only, mirroring the P08 lifecycle specs: the plan mechanics (screening state,
+  // creation, review) need an approved professional-rules flag to run at all. Demo content stays
+  // unpublishable and every real-user gate is untouched.
+  professionalRulesApproved: true, authSecurityPolicyApproved: true,
   privacyReviewApproved: false, dataRightsDrillComplete: false,
   backupRestoreDrillComplete: false, operationsReadinessApproved: false,
   deploymentSecurityApproved: false,
@@ -90,15 +93,33 @@ export async function startP11LocalOperableRuntime(options: {
     targetPool = new Pool({ connectionString: targetUrl.toString() });
     await applyMigrations(new PgMigrationDatabase(targetPool));
     await seedPostgres(targetPool);
+    runtimePlanTime = new Date();
+    adjustments.clear();
+    weeklySubmissionStates.clear();
     app = await buildApplication(environment, {
       authPolicy: policy,
       routeAccessSnapshot: allowProtectedRoutes(),
       recordSchemaProvider: { getApprovedRecordSchema: async () => schema },
       recordRepositoryPool: targetPool,
       recordContextPool: targetPool,
+      planClock: { now: () => runtimePlanTime },
+      consentProvider: {
+        getCurrentConsent: async () => ({
+          version: 'consent-v1',
+          content: { format: 'PLAIN_TEXT' as const, text: 'FICTIONAL LOCAL RUNTIME CONSENT' },
+        }),
+      },
+      screeningProvider: { isApprovedConclusion: async () => true },
+      profileSchemaProvider: {
+        getApprovedProfileSchema: async () => ({
+          version: 'plan-fixture-profile-v1',
+          steps: [{ id: 'fixture-ready', fields: [{ name: 'fixtureReady', type: 'BOOLEAN' as const, required: true }] }],
+        }),
+      },
     });
     await seedApi(app);
     const surfacePool = targetPool;
+    const runtimeDatabase = app.get(DatabaseService).database as unknown as PgliteLike;
     const nestHandler = app.getHttpAdapter().getInstance() as (
       request: IncomingMessage,
       response: ServerResponse,
@@ -119,7 +140,11 @@ export async function startP11LocalOperableRuntime(options: {
         return;
       }
       if (request.method === 'POST' && request.url === '/p11-local/weekly-feedback') {
-        void respondWeeklyFeedbackSubmit(request, response);
+        void respondWeeklyFeedbackSubmit(request, response, { baseUrl, database: runtimeDatabase });
+        return;
+      }
+      if (request.method === 'GET' && request.url === '/p11-local/adjustment') {
+        respondAdjustmentSurface(response);
         return;
       }
       if (request.method === 'POST' && request.url === '/p11-local/shutdown') {
@@ -163,6 +188,35 @@ export async function startP11LocalOperableRuntime(options: {
     throw error;
   }
 }
+
+const staffTokens = {
+  operations: 'p11-local-operations-token',
+  nutrition: 'p11-local-nutrition-token',
+  training: 'p11-local-training-token',
+} as const;
+
+const staffAccounts = [
+  { id: 'p11-local-operations', role: 'OPERATIONS', token: staffTokens.operations },
+  { id: 'p11-local-nutrition', role: 'NUTRITION_REVIEWER', token: staffTokens.nutrition },
+  { id: 'p11-local-training', role: 'TRAINING_REVIEWER', token: staffTokens.training },
+] as const;
+
+let runtimePlanTime = new Date();
+
+type AdjustmentFacts = {
+  planVersionId: string;
+  status: string;
+  sourceType: string;
+  publishBlocked: string | null;
+  previousPlanVersionId: string;
+  previousStatus: string;
+};
+
+const adjustments = new Map<string, AdjustmentFacts>();
+
+type PgliteLike = {
+  query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }>;
+};
 
 function runtimeFixture(
   label: string,
@@ -233,6 +287,88 @@ function respondWeeklyFeedbackView(response: ServerResponse): void {
   response.end(body);
 }
 
+function respondAdjustmentSurface(response: ServerResponse): void {
+  const body = JSON.stringify({
+    testOnly: true,
+    fixtures: fixtures.map((fixture) => ({
+      fixtureId: fixture.fixtureId,
+      adjustment: adjustments.get(fixture.fixtureId) ?? null,
+    })),
+  });
+  response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+  response.end(body);
+}
+
+async function driveWeeklyAdjustment(
+  baseUrl: string,
+  database: PgliteLike,
+  fixture: RuntimeFixture,
+): Promise<void> {
+  const adjustmentId = `p11-local-adjustment-${fixture.fixtureId}`;
+  const effectiveAt = new Date(runtimePlanTime.getTime() + 7 * 86_400_000);
+  const effectiveTo = new Date(effectiveAt.getTime() + 7 * 86_400_000);
+  const headers = (key: string) => ({
+    'Content-Type': 'application/json', 'x-request-id': key, 'idempotency-key': key,
+  });
+  const call = async (label: string, path: string, init: RequestInit): Promise<unknown> => {
+    const response = await fetch(`${baseUrl}${path}`, init);
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`P11_LOCAL_ADJUSTMENT_FAILED_${label}_${response.status}_${detail.slice(0, 160)}`);
+    }
+    return response.json();
+  };
+  await call('create', '/api/v1/plan-versions', {
+    method: 'POST',
+    headers: {
+      ...headers(`p11-local-adjustment-create-${fixture.fixtureId}`),
+      Authorization: `Bearer ${staffTokens.operations}`,
+    },
+    body: JSON.stringify({
+      id: adjustmentId,
+      userId: fixture.accountId,
+      effectiveAt: effectiveAt.toISOString(),
+      effectiveTo: effectiveTo.toISOString(),
+      contentMode: 'DEMO_UNREVIEWED',
+    }),
+  });
+  await database.query(
+    `UPDATE planning.plan_version SET source_type='WEEKLY_ADJUSTMENT' WHERE id=$1`,
+    [adjustmentId],
+  );
+  const transition = (event: { type: string } & Record<string, string>, token: string, key: string) => call(
+    event.type,
+    `/api/v1/plan-versions/${adjustmentId}/transitions`,
+    { method: 'POST', headers: { ...headers(key), Authorization: `Bearer ${token}` }, body: JSON.stringify(event) },
+  );
+  const key = (step: string) => `p11-local-adjustment-${step}-${fixture.fixtureId}`;
+  await transition({ type: 'SUBMIT_REVIEW' }, staffTokens.operations, key('submit'));
+  await transition({ type: 'APPROVE_DIET', actorId: 'p11-local-nutrition' }, staffTokens.nutrition, key('diet'));
+  await transition({ type: 'APPROVE_TRAINING', actorId: 'p11-local-training' }, staffTokens.training, key('training'));
+  // The local runtime keeps the real gates: demo content can never be published and unapproved
+  // professional rules keep blocking publication, so the adjustment stops at this gate by design.
+  const publish = await fetch(`${baseUrl}/api/v1/plan-versions/${adjustmentId}/transitions`, {
+    method: 'POST',
+    headers: { ...headers(key('publish')), Authorization: `Bearer ${staffTokens.operations}` },
+    body: JSON.stringify({ type: 'PUBLISH', occurredAt: runtimePlanTime.toISOString() }),
+  });
+  if (publish.status !== 409) throw new Error(`P11_LOCAL_ADJUSTMENT_PUBLISH_UNEXPECTED_${publish.status}`);
+  const publishBody = await publish.json() as { errorCode?: unknown };
+  const publishBlocked = typeof publishBody.errorCode === 'string' ? publishBody.errorCode : 'UNKNOWN';
+  const rows = await database.query<{ id: string; status: string; sourceType: string }>(
+    `SELECT id, status, source_type AS "sourceType" FROM planning.plan_version WHERE id IN ($1,$2)`,
+    [adjustmentId, fixture.planVersionId],
+  );
+  adjustments.set(fixture.fixtureId, {
+    planVersionId: adjustmentId,
+    status: rows.rows.find((row) => row.id === adjustmentId)?.status ?? 'UNKNOWN',
+    sourceType: rows.rows.find((row) => row.id === adjustmentId)?.sourceType ?? 'UNKNOWN',
+    publishBlocked,
+    previousPlanVersionId: fixture.planVersionId,
+    previousStatus: rows.rows.find((row) => row.id === fixture.planVersionId)?.status ?? 'UNKNOWN',
+  });
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(chunk as Buffer);
@@ -242,6 +378,7 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 async function respondWeeklyFeedbackSubmit(
   request: IncomingMessage,
   response: ServerResponse,
+  context: { baseUrl: string; database: PgliteLike },
 ): Promise<void> {
   try {
     const payload = await readJsonBody(request);
@@ -275,13 +412,18 @@ async function respondWeeklyFeedbackSubmit(
     });
     if (result.outcome === 'ADJUSTMENT_PENDING') {
       weeklySubmissionStates.set(fixture.fixtureId, 'ADJUSTMENT_PENDING');
+      await driveWeeklyAdjustment(context.baseUrl, context.database, fixture);
     }
     const body = JSON.stringify({ testOnly: true, ...result });
     response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
     response.end(body);
-  } catch {
-    response.writeHead(400, { 'content-length': '0' });
-    response.end();
+  } catch (cause: unknown) {
+    const body = JSON.stringify({
+      testOnly: true,
+      error: cause instanceof Error ? cause.message : 'P11_LOCAL_WEEKLY_FEEDBACK_FAILED',
+    });
+    response.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    response.end(body);
   }
 }
 
@@ -359,6 +501,18 @@ async function seedPostgres(pool: Pool): Promise<void> {
 async function seedApi(app: INestApplication): Promise<void> {
   const database = app.get(DatabaseService).database;
   const passwordHash = await hashPassword('p11-local-runtime-password', policy);
+  for (const staff of staffAccounts) {
+    await database.query(`INSERT INTO iam.account
+      (id, login_identifier, password_hash, account_type, status, initial_password_change_required)
+      VALUES ($1,$2,$3,'STAFF','ACTIVE',false)`, [staff.id, staff.id, passwordHash]);
+    await database.query(`INSERT INTO iam.account_role (account_id, role_code, qualified_at)
+      VALUES ($1,$2,now())`, [staff.id, staff.role]);
+    await database.query(`INSERT INTO iam.session
+      (id, account_id, session_kind, token_hash, mfa_verified, expires_at, active_role, session_scope)
+      VALUES ($1,$2,'STAFF',$3,false,TIMESTAMPTZ '2099-01-01T00:00:00Z',$4,'FULL')`, [
+      `${staff.id}-session`, staff.id, tokenHash(staff.token), staff.role,
+    ]);
+  }
   for (const fixture of fixtures) {
     await database.query(`INSERT INTO iam.account
       (id, login_identifier, password_hash, account_type, status, initial_password_change_required)
@@ -367,6 +521,28 @@ async function seedApi(app: INestApplication): Promise<void> {
       (id, account_id, session_kind, token_hash, mfa_verified, expires_at, active_role, session_scope)
       VALUES ($1,$2,'USER',$3,false,TIMESTAMPTZ '2099-01-01T00:00:00Z','USER','FULL')`, [
       fixture.sessionId, fixture.accountId, tokenHash(fixture.sessionToken),
+    ]);
+    await database.query(`INSERT INTO care.consent_record (id, user_id, consent_version, accepted_at)
+      VALUES ($1,$2,'consent-v1',now())`, [`${fixture.accountId}-consent`, fixture.accountId]);
+    await database.query(`INSERT INTO care.screening_result
+      (id, user_id, conclusion, source, rule_version, recorded_by, actor_role)
+      VALUES ($1,$2,'PASS','MANUAL_REVIEW','fictional-plan-rule-v1','p11-local-nutrition','NUTRITION_REVIEWER')`,
+    [`${fixture.accountId}-screening`, fixture.accountId]);
+    await database.query(`INSERT INTO care.user_profile
+      (id, user_id, profile_data, completed_steps, schema_version)
+      VALUES ($1,$2,'{"fixture-ready":{"fixtureReady":true}}','["fixture-ready"]','plan-fixture-profile-v1')`,
+    [`${fixture.accountId}-profile`, fixture.accountId]);
+    await database.query(`INSERT INTO planning.plan (id, user_id) VALUES ($1,$2)`, [
+      fixture.planId, fixture.accountId,
+    ]);
+    await database.query(`INSERT INTO planning.plan_version
+      (id, plan_id, user_id, version_number, status, published_at, confirmation_deadline_at,
+       effective_at, effective_to, professional_rules_approved, demo_only, payload)
+      VALUES ($1,$2,$3,1,'ACTIVE',TIMESTAMPTZ '2025-12-29T12:00:00Z',
+        TIMESTAMPTZ '2025-12-31T12:00:00Z',TIMESTAMPTZ '2026-01-01T00:00:00Z',
+        TIMESTAMPTZ '2099-01-01T00:00:00Z',false,true,$4)`, [
+      fixture.planVersionId, fixture.planId, fixture.accountId,
+      JSON.stringify({ fixtureId: fixture.fixtureId, goalType: fixture.goalType, demoOnly: true }),
     ]);
   }
 }

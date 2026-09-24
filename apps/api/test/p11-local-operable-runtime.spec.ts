@@ -88,6 +88,37 @@ describe.runIf(Boolean(adminUrl))('P11 local operable runtime', () => {
     await expect(blocked.json()).resolves.toMatchObject({ testOnly: true, outcome: 'BLOCKED' });
   });
 
+  it('drives the weekly adjustment version to the professional publication gate', async () => {
+    runtime = await startP11LocalOperableRuntime({ adminUrl: adminUrl!, port: 0 });
+    const fixtures = await runtime.fixtureManifest();
+    const [fatLoss] = fixtures;
+    const submit = await fetch(`${runtime.baseUrl}/p11-local/weekly-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fixtureId: fatLoss!.fixtureId, requestedOutcome: 'CHANGE_TRAINING_CONTENT' }),
+    });
+    expect(submit.status, JSON.stringify(await submit.clone().json())).toBe(200);
+    const adjustment = await (await fetch(`${runtime.baseUrl}/p11-local/adjustment`)).json();
+    expect(adjustment.testOnly).toBe(true);
+    const entries = adjustment.fixtures as Array<{
+      fixtureId: string;
+      adjustment: {
+        planVersionId: string; status: string; sourceType: string;
+        publishBlocked: string | null; previousStatus: string;
+      } | null;
+    }>;
+    const entry = entries.find((candidate) => candidate.fixtureId === fatLoss!.fixtureId);
+    expect(entry?.adjustment).toMatchObject({
+      planVersionId: `p11-local-adjustment-${fatLoss!.fixtureId}`,
+      status: 'READY_TO_PUBLISH',
+      sourceType: 'WEEKLY_ADJUSTMENT',
+      previousStatus: 'ACTIVE',
+    });
+    expect(entry?.adjustment?.publishBlocked).toBeTruthy();
+    const other = entries.find((candidate) => candidate.fixtureId !== fatLoss!.fixtureId);
+    expect(other?.adjustment).toBeNull();
+  });
+
   it('writes independently through the local API and authoritative PG18 context', async () => {
     runtime = await startP11LocalOperableRuntime({ adminUrl: adminUrl!, port: 0 });
     const fixtureResponse = await fetch(`${runtime.baseUrl}/p11-local/fixtures`);
